@@ -282,6 +282,21 @@ response: ok
 - `bash` 支持 workspace cwd 校验、超时、输出上限和非零退出码结构化返回。
 - `benchmark-sandbox` 当前是 workspace/cwd 级约束，不是 OS/container 级沙箱。
 
+### 13. Benchmark report export
+
+新增：
+
+- `src/benchmark/report.ts`
+- `test/benchmark-report.test.ts`
+
+当前能力：
+
+- `createBenchmarkReport()` 可以从 `SuiteRunResult` 生成稳定 JSON DTO。
+- `formatBenchmarkReportMarkdown()` 可以生成适合人工阅读/PR 评论的 Markdown report。
+- CLI `benchmark` 新增 `--report <file>` 和 `--report-format <json|markdown>`。
+- `.md` / `.markdown` report path 会默认推断为 Markdown，其余默认 JSON。
+- `--output` 仍保持 compact JSON 输出语义，`--trace` 仍保持完整 run result 语义。
+
 ## 当前测试状态
 
 已通过：
@@ -295,8 +310,8 @@ npm run build
 当前测试数量：
 
 ```txt
-20 test files
-102 tests passed
+21 test files
+110 tests passed
 ```
 
 ## 与 Claude Code 的区别
@@ -327,6 +342,7 @@ Claude Code 具备：
 - workspace-scoped read/write/edit/bash tools。
 - tool profiles。
 - benchmark。
+- benchmark JSON/Markdown report export。
 - evolution comparison。
 - verifier。
 
@@ -449,11 +465,11 @@ ModelRegistry
 
 ## 建议下一阶段
 
-建议下一阶段实现 benchmark / evolution report 导出与 trace replay。
+建议下一阶段实现 evolution report 导出、evolution history 与 trace replay。
 
 目标：
 
-- benchmark run 可以导出稳定 JSON/Markdown report。
+- evolution comparison 可以导出稳定 JSON/Markdown report。
 - evolution comparison 可以保存历史记录并导出决策依据。
 - trace replay 可以基于已有 `RuntimeEvent` 重放模型/tool 交互。
 - verification artifact 可以把失败原因、policy event、tool result 截断信息结构化保存。

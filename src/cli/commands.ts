@@ -5,6 +5,7 @@ import { AgentRuntime } from "../runtime/agent-runtime.js";
 import { BenchmarkRunner } from "../benchmark/runner.js";
 import { loadBenchmarkSuiteFromFile } from "../benchmark/loader.js";
 import { MinimalTaskGrader } from "../benchmark/grader.js";
+import { createBenchmarkReport, formatBenchmarkReportMarkdown } from "../benchmark/report.js";
 import type { AgentTaskRunResult, SuiteRunResult } from "../benchmark/types.js";
 import { ModelRegistry, type ModelRegistryOptions } from "../models/registry.js";
 import { loadTaskSpecFromFile } from "../tasks/loader.js";
@@ -30,6 +31,7 @@ export interface CliResult {
 	human?: string;
 	json?: unknown;
 	trace?: unknown;
+	files?: Array<{ path: string; content: string }>;
 }
 
 export async function handleModelsDiscover(command: ModelsDiscoverCommand, deps: CliDeps): Promise<CliResult> {
@@ -61,17 +63,22 @@ export async function handleBenchmark(command: BenchmarkCommand, deps: CliDeps):
 	const suite = await loadBenchmarkSuiteFromFile(command.suitePath);
 	const result = await createRunner(command, deps).runSuite(effectiveAgent(agent, command.provider, command.model), suite);
 	const json = benchmarkJson(result);
+	const report = command.reportPath ? createBenchmarkReport(result) : undefined;
 	return {
 		exitCode: result.runs.some((run) => run.status === "errored" || run.status === "timeout") ? 1 : 0,
 		json,
 		trace: result,
 		human: formatBenchmarkHuman(result),
+		...(command.reportPath && report ? { files: [{ path: command.reportPath, content: command.reportFormat === "markdown" ? formatBenchmarkReportMarkdown(report) : `${JSON.stringify(report, null, 2)}\n` }] } : {}),
 	};
 }
 
 export async function writeOptionalFiles(command: { outputPath?: string; tracePath?: string }, result: CliResult): Promise<void> {
 	if (command.outputPath) await writeJsonFile(command.outputPath, result.json);
 	if (command.tracePath) await writeJsonFile(command.tracePath, result.trace ?? result.json);
+	for (const file of result.files ?? []) {
+		await writeTextFile(file.path, file.content);
+	}
 }
 
 function createRunner(command: RunCommand | BenchmarkCommand, deps: CliDeps): BenchmarkRunner {
@@ -170,6 +177,10 @@ function formatBenchmarkHuman(result: SuiteRunResult): string {
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+	await writeTextFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function writeTextFile(filePath: string, content: string): Promise<void> {
 	await mkdir(dirname(filePath), { recursive: true });
-	await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+	await writeFile(filePath, content, "utf-8");
 }

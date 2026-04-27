@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { ProviderFormat } from "../models/provider-types.js";
+import type { BenchmarkReportFormat } from "../benchmark/report.js";
 import { parseToolProfile, type ToolProfile } from "../tools/profiles.js";
 
 export type OutputFormat = "human" | "json";
@@ -41,6 +43,8 @@ export interface BenchmarkCommand extends BaseCommand {
 	apiKey?: string;
 	providerFormat: ProviderFormat;
 	toolProfile: ToolProfile;
+	reportFormat: BenchmarkReportFormat;
+	reportPath?: string;
 }
 
 export interface HelpCommand {
@@ -55,7 +59,7 @@ export interface ParseResult {
 
 type FlagValues = Record<string, string | boolean>;
 
-const valueFlags = new Set(["--provider", "--model", "--base-url", "--api-key", "--provider-format", "--tool-profile", "--format", "--output", "--trace", "--agent", "--task", "--suite"]);
+const valueFlags = new Set(["--provider", "--model", "--base-url", "--api-key", "--provider-format", "--tool-profile", "--report", "--report-format", "--format", "--output", "--trace", "--agent", "--task", "--suite"]);
 const booleanFlags = new Set(["--json", "--help"]);
 
 export function parseCliArgs(args: string[]): ParseResult {
@@ -92,7 +96,7 @@ export function helpText(): string {
 Usage:
   evolving-agent models discover --provider <id> --base-url <url> [--api-key <key>] [--json]
   evolving-agent run --agent <file> --task <file> --provider <id> --model <id> --base-url <url> [--api-key <key>] [--tool-profile <profile>] [--json]
-  evolving-agent benchmark --suite <file> --agent <file> --provider <id> --model <id> --base-url <url> [--api-key <key>] [--tool-profile <profile>] [--json]
+  evolving-agent benchmark --suite <file> --agent <file> --provider <id> --model <id> --base-url <url> [--api-key <key>] [--tool-profile <profile>] [--report <file>] [--report-format <json|markdown>] [--json]
 
 Options:
   --provider <id>
@@ -101,6 +105,8 @@ Options:
   --api-key <key>
   --provider-format <openai-responses|anthropic-messages>
   --tool-profile <read-only|coding|benchmark-sandbox|dangerous>
+  --report <file>
+  --report-format <json|markdown>
   --format <human|json>
   --json
   --output <file>
@@ -226,6 +232,8 @@ function buildBenchmark(
 	if (!agentPath || !suitePath || !provider || !model || !baseURL) return undefined;
 	const apiKey = apiKeyFlag(flags);
 	const toolProfile = toolProfileFlag(flags, diagnostics);
+	const reportPath = stringFlag(flags, "--report");
+	const reportFormat = reportFormatFlag(flags, reportPath, diagnostics);
 	return {
 		kind: "benchmark",
 		agentPath,
@@ -235,8 +243,10 @@ function buildBenchmark(
 		baseURL,
 		providerFormat: common.providerFormat,
 		toolProfile,
+		reportFormat,
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
+		...(reportPath ? { reportPath } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
 		...(common.tracePath ? { tracePath: common.tracePath } : {}),
 	};
@@ -257,6 +267,19 @@ function toolProfileFlag(flags: FlagValues, diagnostics: string[]): ToolProfile 
 	if (profile) return profile;
 	diagnostics.push("--tool-profile must be read-only, coding, benchmark-sandbox, or dangerous");
 	return "read-only";
+}
+
+function reportFormatFlag(flags: FlagValues, reportPath: string | undefined, diagnostics: string[]): BenchmarkReportFormat {
+	const value = stringFlag(flags, "--report-format");
+	if (value === "json" || value === "markdown") return value;
+	if (value !== undefined) diagnostics.push("--report-format must be json or markdown");
+	return inferReportFormat(reportPath);
+}
+
+function inferReportFormat(reportPath: string | undefined): BenchmarkReportFormat {
+	const extension = reportPath ? path.extname(reportPath).toLowerCase() : "";
+	if (extension === ".md" || extension === ".markdown") return "markdown";
+	return "json";
 }
 
 function parseProviderFormat(value: string, diagnostics: string[]): ProviderFormat {

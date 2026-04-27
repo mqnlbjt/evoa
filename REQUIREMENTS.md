@@ -156,7 +156,7 @@
 4. ~~没有 example agents / suites / local provider config。~~ 已完成基础 examples。
 5. ~~没有 OpenAI / Anthropic tool call 解析。~~ 已完成。
 6. ~~没有内置 coding tools。~~ 已完成 read-only 与 workspace-scoped mutating tools。
-7. 没有 benchmark / evolution report 导出。
+7. benchmark report 导出已完成；evolution report 导出待做。
 
 中优先级缺口：
 
@@ -983,11 +983,12 @@ Model Discovery
 
 当前下一批任务：
 
-1. 实现 mutating tools：`write_file`、`edit_file`、`bash`。
-2. 增加 benchmark / evolution report 导出。
-3. 增加 trace replay。
-4. 增加 evolution history store。
-5. 增加 candidate generator 示例。
+1. ~~实现 mutating tools：`write_file`、`edit_file`、`bash`。~~ 已完成。
+2. ~~增加 benchmark report 导出。~~ 已完成 JSON / Markdown 当前 run 导出。
+3. 增加 evolution report 导出。
+4. 增加 trace replay。
+5. 增加 evolution history store。
+6. 增加 candidate generator 示例。
 
 ## 12. 判断边界
 

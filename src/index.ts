@@ -11,6 +11,7 @@ export * from "./models/discovery.js";
 export * from "./models/registry.js";
 export * from "./benchmark/types.js";
 export * from "./benchmark/runner.js";
+export * from "./benchmark/report.js";
 export * from "./benchmark/leaderboard.js";
 export * from "./benchmark/loader.js";
 export * from "./benchmark/validation.js";

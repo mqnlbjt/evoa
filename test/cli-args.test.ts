@@ -29,7 +29,25 @@ describe("parseCliArgs", () => {
 	it("parses benchmark", () => {
 		const result = parseCliArgs(["benchmark", "--suite", "suite.json", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--json"]);
 		expect(result.diagnostics).toEqual([]);
-		expect(result.command).toMatchObject({ kind: "benchmark", format: "json" });
+		expect(result.command).toMatchObject({ kind: "benchmark", format: "json", reportFormat: "json" });
+	});
+
+	it("infers markdown benchmark report format", () => {
+		const result = parseCliArgs(["benchmark", "--suite", "suite.json", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--report", "report.md"]);
+		expect(result.diagnostics).toEqual([]);
+		expect(result.command).toMatchObject({ kind: "benchmark", reportPath: "report.md", reportFormat: "markdown" });
+	});
+
+	it("parses explicit benchmark report format", () => {
+		const result = parseCliArgs(["benchmark", "--suite", "suite.json", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--report", "report.md", "--report-format", "json"]);
+		expect(result.diagnostics).toEqual([]);
+		expect(result.command).toMatchObject({ kind: "benchmark", reportPath: "report.md", reportFormat: "json" });
+	});
+
+	it("reports invalid benchmark report format", () => {
+		const result = parseCliArgs(["benchmark", "--suite", "suite.json", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--report-format", "html"]);
+		expect(result.diagnostics.join(" ")).toContain("--report-format");
+		expect(result.command).toMatchObject({ kind: "benchmark", reportFormat: "json" });
 	});
 
 	it("parses --format json", () => {

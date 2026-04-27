@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -78,6 +78,32 @@ describe("CLI main", () => {
 
 		expect(code).toBe(0);
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "benchmark", summary: { totalTasks: 1, passedTasks: 1, passRate: 1 } });
+	});
+
+	it("writes benchmark JSON reports", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const reportPath = path.join(root, "report.json");
+		const io = createIO();
+		const code = await main([
+			"benchmark", "--suite", suitePath, "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--report", reportPath, "--json",
+		], { ...io, openAIClientFactory: () => fakeOpenAIClient("pong"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({ version: 1, suite: { id: "smoke" }, summary: { passedTasks: 1 } });
+	});
+
+	it("writes benchmark Markdown reports", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const reportPath = path.join(root, "report.md");
+		const io = createIO();
+		const code = await main([
+			"benchmark", "--suite", suitePath, "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--report", reportPath, "--report-format", "markdown", "--json",
+		], { ...io, openAIClientFactory: () => fakeOpenAIClient("pong"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		const markdown = await readFile(reportPath, "utf8");
+		expect(markdown).toContain("# Benchmark Report");
+		expect(markdown).toContain("| smoke\\-task | general | passed | 1/1 |");
 	});
 
 	it("runs a task through the default read-only tool registry", async () => {
