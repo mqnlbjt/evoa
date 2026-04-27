@@ -116,10 +116,36 @@ describe("CLI main", () => {
 			"--base-url",
 			"http://localhost:8317/v1",
 			"--json",
-		], { ...io, openAIClientFactory: () => fakeToolOpenAIClient(), workspaceRoot: root, now: () => 1, createId: nextId() });
+		], { ...io, openAIClientFactory: () => fakeToolOpenAIClient("read_file"), workspaceRoot: root, now: () => 1, createId: nextId() });
 
 		expect(code).toBe(0);
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "run", status: "passed", score: { score: 1 } });
+	});
+
+	it("does not expose mutating tools by default", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const agentFile = path.join(root, "agent.json");
+		const taskFile = path.join(root, "task.json");
+		await writeToolFixture(agentFile, taskFile, ["write_file"]);
+		const io = createIO();
+		await main([
+			"run", "--agent", agentFile, "--task", taskFile, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--json",
+		], { ...io, openAIClientFactory: () => inspectingToolClient(), workspaceRoot: root, now: () => 1, createId: nextId() });
+
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, status: "failed" });
+	});
+
+	it("exposes mutating tools with the coding profile", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const agentFile = path.join(root, "agent.json");
+		const taskFile = path.join(root, "task.json");
+		await writeToolFixture(agentFile, taskFile, ["write_file"]);
+		const io = createIO();
+		await main([
+			"run", "--agent", agentFile, "--task", taskFile, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--tool-profile", "coding", "--json",
+		], { ...io, openAIClientFactory: () => inspectingToolClient(), workspaceRoot: root, now: () => 1, createId: nextId() });
+
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, status: "passed" });
 	});
 });
 
@@ -138,19 +164,50 @@ function fakeOpenAIClient(answer: string): OpenAIResponsesClient {
 	return { responses: { async create() { return { output_text: answer }; } } };
 }
 
-function fakeToolOpenAIClient(): OpenAIResponsesClient {
+function fakeToolOpenAIClient(toolName: string): OpenAIResponsesClient {
 	let calls = 0;
 	return {
 		responses: {
 			async create() {
 				calls += 1;
 				if (calls === 1) {
-					return { output_text: "", output: [{ type: "function_call", call_id: "call_1", name: "read_file", arguments: "{\"path\":\"note.txt\"}" }] };
+					return { output_text: "", output: [{ type: "function_call", call_id: "call_1", name: toolName, arguments: "{\"path\":\"note.txt\"}" }] };
 				}
 				return { output_text: "saw tool" };
 			},
 		},
 	};
+}
+
+function inspectingToolClient(): OpenAIResponsesClient {
+	return {
+		responses: {
+			async create(input) {
+				const names = input.tools?.map((tool) => "name" in tool ? tool.name : "") ?? [];
+				return { output_text: names.join(",") };
+			},
+		},
+	};
+}
+
+async function writeToolFixture(agentFile: string, taskFile: string, allowedTools: string[]): Promise<void> {
+	await writeFile(agentFile, JSON.stringify({
+		id: "tool-agent",
+		version: "1.0.0",
+		name: "Tool Agent",
+		kind: "baseline",
+		model: { provider: "local", model: "gpt-5.4-mini" },
+		prompts: { system: "Inspect tools." },
+		tools: { allowedTools, permissionMode: "allow", maxToolCalls: 2 },
+		runtime: { maxTurns: 1 },
+	}));
+	await writeFile(taskFile, JSON.stringify({
+		id: "tool-task",
+		type: "general",
+		title: "Inspect tools",
+		prompt: "Inspect tools",
+		scoring: { method: "rubric", config: { contains: allowedTools } },
+	}));
 }
 
 function nextId(): () => string {

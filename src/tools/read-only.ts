@@ -1,8 +1,8 @@
-import { constants } from "node:fs";
-import { access, lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { EvolvingAgentTool } from "./types.js";
 import { ToolRegistry } from "./registry.js";
+import { objectInput, optionalStringField, readTextFile, relativePath, resolveExistingInsideRoot, stringField, throwIfAborted } from "./workspace.js";
 
 export interface ReadOnlyToolOptions {
 	workspaceRoot: string;
@@ -195,17 +195,6 @@ function resolveOptions(options: ReadOnlyToolOptions): ResolvedOptions {
 	};
 }
 
-async function resolveExistingInsideRoot(root: string, userPath: string): Promise<string> {
-	const rootReal = await realpath(root);
-	const candidate = path.isAbsolute(userPath) ? userPath : path.resolve(rootReal, userPath);
-	await access(candidate, constants.F_OK);
-	const targetReal = await realpath(candidate);
-	if (targetReal !== rootReal && !targetReal.startsWith(`${rootReal}${path.sep}`)) {
-		throw new Error("Path is outside workspace root");
-	}
-	return targetReal;
-}
-
 async function walkFiles(options: ResolvedOptions, start: string, visit: (file: string) => Promise<boolean>, signal?: AbortSignal): Promise<boolean> {
 	throwIfAborted(signal);
 	const info = await lstat(start);
@@ -225,18 +214,6 @@ async function walkFiles(options: ResolvedOptions, start: string, visit: (file: 
 		}
 	}
 	return false;
-}
-
-async function readTextFile(file: string, signal?: AbortSignal): Promise<string> {
-	throwIfAborted(signal);
-	const buffer = await readFile(file);
-	throwIfAborted(signal);
-	if (buffer.subarray(0, Math.min(buffer.length, 1024)).includes(0)) throw new Error("File appears to be binary");
-	return buffer.toString("utf8");
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-	if (signal?.aborted) throw new Error("Operation aborted");
 }
 
 function globMatcher(pattern: string): (value: string) => boolean {
@@ -262,29 +239,6 @@ function escapeGlob(pattern: string): string {
 		}
 	}
 	return output;
-}
-
-function objectInput(input: unknown): Record<string, unknown> {
-	if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Tool input must be an object");
-	return input as Record<string, unknown>;
-}
-
-function stringField(input: Record<string, unknown>, key: string): string {
-	const value = input[key];
-	if (typeof value !== "string" || value.length === 0) throw new Error(`${key} must be a non-empty string`);
-	return value;
-}
-
-function optionalStringField(input: Record<string, unknown>, key: string): string | undefined {
-	const value = input[key];
-	if (value === undefined) return undefined;
-	if (typeof value !== "string" || value.length === 0) throw new Error(`${key} must be a non-empty string`);
-	return value;
-}
-
-function relativePath(root: string, target: string): string {
-	const relative = path.relative(path.resolve(root), target);
-	return relative === "" ? "." : relative.split(path.sep).join("/");
 }
 
 function direntType(entry: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): string {

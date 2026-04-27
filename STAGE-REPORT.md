@@ -260,6 +260,28 @@ response: ok
 - 新增 `MinimalTaskGrader`，支持 deterministic `exact` 与 `rubric.contains`。
 - 示例文件覆盖 local provider、basic agent、smoke task 和 smoke suite。
 
+### 12. Workspace-scoped coding tools 与 tool profiles
+
+新增：
+
+- `src/tools/workspace.ts`
+- `src/tools/read-only.ts`
+- `src/tools/mutating.ts`
+- `src/tools/profiles.ts`
+- `test/read-only-tools.test.ts`
+- `test/mutating-tools.test.ts`
+
+当前能力：
+
+- read-only profile 内置 `read_file`、`list_dir`、`find_files`、`grep`。
+- coding profile 额外启用 `write_file`、`edit_file`。
+- benchmark-sandbox / dangerous profile 额外启用 `bash`。
+- CLI 新增 `--tool-profile <read-only|coding|benchmark-sandbox|dangerous>`，默认仍是 `read-only`。
+- 文件工具限制在 workspace root 内，拒绝路径逃逸和 symlink 写入。
+- `edit_file` 使用 exact replacement，支持 all-or-nothing 多编辑与 `replaceAll`。
+- `bash` 支持 workspace cwd 校验、超时、输出上限和非零退出码结构化返回。
+- `benchmark-sandbox` 当前是 workspace/cwd 级约束，不是 OS/container 级沙箱。
+
 ## 当前测试状态
 
 已通过：
@@ -273,8 +295,8 @@ npm run build
 当前测试数量：
 
 ```txt
-18 test files
-71 tests passed
+20 test files
+102 tests passed
 ```
 
 ## 与 Claude Code 的区别
@@ -302,6 +324,8 @@ Claude Code 具备：
 - model registry。
 - 最小 CLI。
 - tool registry。
+- workspace-scoped read/write/edit/bash tools。
+- tool profiles。
 - benchmark。
 - evolution comparison。
 - verifier。
@@ -309,7 +333,7 @@ Claude Code 具备：
 还没有：
 
 - TUI。
-- 真正的代码编辑工具集。
+- OS/container 级工具沙箱。
 - MCP。
 - hooks。
 - skills。
@@ -402,8 +426,8 @@ ModelRegistry
 
 优先级较高：
 
-1. 基础 coding tools：read、write、bash、edit。
-2. tool call 协议：让 OpenAI/Anthropic client 可以解析模型返回的工具调用。
+1. ~~基础 coding tools：read、write、bash、edit。~~ 已完成 workspace-scoped 实现。
+2. ~~tool call 协议：让 OpenAI/Anthropic client 可以解析模型返回的工具调用。~~ 已完成。
 
 优先级中等：
 
@@ -425,14 +449,13 @@ ModelRegistry
 
 ## 建议下一阶段
 
-建议下一阶段实现 tool call 协议与基础 coding tools。
+建议下一阶段实现 benchmark / evolution report 导出与 trace replay。
 
 目标：
 
-- OpenAI Responses client 可以解析模型返回的 tool call。
-- Anthropic Messages client 可以解析 `tool_use`。
-- runtime 可以把 tool result 按 provider 格式回传给模型。
-- 新增 read-only tools：`read_file`、`grep`、`find_files`、`list_dir`。
-- 后续再加入 mutating tools：`write_file`、`edit_file`、`bash`。
+- benchmark run 可以导出稳定 JSON/Markdown report。
+- evolution comparison 可以保存历史记录并导出决策依据。
+- trace replay 可以基于已有 `RuntimeEvent` 重放模型/tool 交互。
+- verification artifact 可以把失败原因、policy event、tool result 截断信息结构化保存。
 
-这样可以把当前 CLI/runtime/model/tool registry 从“文本任务闭环”推进到“可执行工具调用的 agent 闭环”。
+这样可以把当前“可执行工具调用的 agent 闭环”推进到“可分析、可重放、可持续演化的 benchmark 闭环”。

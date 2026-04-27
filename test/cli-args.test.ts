@@ -11,7 +11,19 @@ describe("parseCliArgs", () => {
 	it("parses run", () => {
 		const result = parseCliArgs(["run", "--agent", "agent.json", "--task", "task.json", "--provider", "local", "--model", "model", "--base-url", "url"]);
 		expect(result.diagnostics).toEqual([]);
-		expect(result.command).toMatchObject({ kind: "run", agentPath: "agent.json", taskPath: "task.json", model: "model" });
+		expect(result.command).toMatchObject({ kind: "run", agentPath: "agent.json", taskPath: "task.json", model: "model", toolProfile: "read-only" });
+	});
+
+	it("parses tool profiles", () => {
+		const result = parseCliArgs(["run", "--agent", "agent.json", "--task", "task.json", "--provider", "local", "--model", "model", "--base-url", "url", "--tool-profile", "coding"]);
+		expect(result.diagnostics).toEqual([]);
+		expect(result.command).toMatchObject({ kind: "run", toolProfile: "coding" });
+	});
+
+	it("reports invalid tool profiles", () => {
+		const result = parseCliArgs(["benchmark", "--suite", "suite.json", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--tool-profile", "wat"]);
+		expect(result.diagnostics.join(" ")).toContain("--tool-profile");
+		expect(result.command).toMatchObject({ kind: "benchmark", toolProfile: "read-only" });
 	});
 
 	it("parses benchmark", () => {

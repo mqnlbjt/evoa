@@ -41,15 +41,29 @@
 - `src/tools/registry.ts`
 - `src/tools/policy.ts`
 - `src/tools/types.ts`
+- `src/tools/workspace.ts`
+- `src/tools/read-only.ts`
+- `src/tools/mutating.ts`
+- `src/tools/profiles.ts`
 
 当前能力：
 
 - `ToolRegistry` 注册和执行工具。
-- 支持 `allow` / `deny` / `ask`。
+- 支持 `allow` / `deny` / `ask`，其中 `ask` 在非交互 benchmark 模式下明确按 deny 处理。
 - `agent.tools.deniedTools` 优先级高于 allowed tools。
 - `task.allowedTools` 可以进一步收窄 agent 权限。
-- 支持 `maxToolCalls`。
+- 支持 `maxToolCalls`，超过限制会返回结构化 `limit_exceeded` tool result。
 - 支持 runtime hooks：`beforeToolCall` / `afterToolResult`。
+- hooks 可以 deny、mutate tool input、mutate tool result。
+- `ToolResult` 支持 `success` / `error` / `denied` / `unknown` / `limit_exceeded` / `timeout` 状态。
+- 支持 tool result 安全序列化和大小截断。
+- 支持 tool-level timeout 和 abort signal。
+- 支持 `parallel-safe` 工具并发执行，同时保持模型可见 tool result 顺序稳定。
+- 已内置 read-only tools：`read_file`、`list_dir`、`find_files`、`grep`。
+- 已内置 workspace-scoped mutating tools：`write_file`、`edit_file`、`bash`。
+- 已支持工具 profile：`read-only`、`coding`、`benchmark-sandbox`、`dangerous`。
+- CLI 默认仍是 `read-only`，mutating tools 需要通过 `--tool-profile` 显式启用。
+- `benchmark-sandbox` 当前是 workspace/cwd 级约束，不是 OS/container 级安全沙箱。
 
 #### Benchmark
 
@@ -136,12 +150,12 @@
 
 高优先级缺口：
 
-1. 没有 `/v1/models` 模型发现。
-2. 没有轻量 `ModelRegistry`。
-3. 没有 CLI。
-4. 没有 example agents / suites / local provider config。
-5. 没有 OpenAI / Anthropic tool call 解析。
-6. 没有内置 coding tools。
+1. ~~没有 `/v1/models` 模型发现。~~ 已完成。
+2. ~~没有轻量 `ModelRegistry`。~~ 已完成。
+3. ~~没有 CLI。~~ 已完成最小 CLI。
+4. ~~没有 example agents / suites / local provider config。~~ 已完成基础 examples。
+5. ~~没有 OpenAI / Anthropic tool call 解析。~~ 已完成。
+6. ~~没有内置 coding tools。~~ 已完成 read-only 与 workspace-scoped mutating tools。
 7. 没有 benchmark / evolution report 导出。
 
 中优先级缺口：
@@ -369,6 +383,8 @@ AgentRuntime ---- AgentSession ---- RuntimeEvent Trace
 
 ### 7.3 ModelRegistry
 
+状态：已完成基础实现。
+
 必须新增轻量 `ModelRegistry`。
 
 核心 API：
@@ -437,7 +453,9 @@ const models = await discoverOpenAICompatibleModels({
 
 ### 7.4 Tool System
 
-当前已有基础 tool registry 和 policy，下一步要补齐工具协议和内置工具。
+状态：已完成基础 tool registry、policy、read-only tools 和工具执行链增强；mutating tools 与 policy profile 仍待实现。
+
+当前已有基础 tool registry 和 policy，下一步要补齐 mutating tools 与更完整 policy profile。
 
 必须支持：
 
@@ -483,6 +501,8 @@ const models = await discoverOpenAICompatibleModels({
 - 超过 `maxToolCalls` 会停止并记录原因。
 
 ### 7.5 Tool Call Protocol
+
+状态：已完成 OpenAI Responses / Anthropic Messages tool call 解析、provider-neutral history 和 tool result roundtrip。
 
 这是 coding tools 之前的关键前置能力。
 
@@ -643,6 +663,8 @@ Benchmark task 示例：
 - subagent spec 可被保留并用于后续 manual subagent。
 
 ### 7.10 CLI
+
+状态：已完成最小 CLI：`models discover`、`run`、`benchmark`；`evolve` 与 report 能力待扩展。
 
 CLI 是当前框架走向可用的关键入口。
 
@@ -805,7 +827,7 @@ examples/
 
 ### 阶段 2：模型发现 + 轻量 ModelRegistry
 
-状态：下一阶段最高优先级。
+状态：已完成。
 
 包含：
 
@@ -823,6 +845,8 @@ examples/
 - 测试覆盖本地 OpenAI-compatible endpoint。
 
 ### 阶段 3：CLI + Examples
+
+状态：已完成最小 CLI 与基础 examples；`evolve` 命令和 report 能力待后续扩展。
 
 包含：
 
@@ -843,6 +867,8 @@ examples/
 
 ### 阶段 4：Tool Call Protocol
 
+状态：已完成 provider-neutral tool-call history、OpenAI Responses tool call 解析、Anthropic `tool_use` 解析和 roundtrip 测试。
+
 包含：
 
 - OpenAI Responses tool call parsing。
@@ -857,6 +883,8 @@ examples/
 - runtime 主流程不依赖 provider 原始结构。
 
 ### 阶段 5：Coding Tools
+
+状态：read-only tools 已完成；mutating tools 待实现。
 
 包含：
 
@@ -946,12 +974,20 @@ Model Discovery
 
 当前第一批任务：
 
-1. 实现 `discoverOpenAICompatibleModels`。
-2. 实现 `ModelRegistry`。
-3. 支持 `registry.createClient(providerId, modelId)`。
-4. 增加 `evolving-agent models discover` CLI。
-5. 增加 `examples/providers/local-openai.json`。
-6. 增加 smoke benchmark 示例。
+1. ~~实现 `discoverOpenAICompatibleModels`。~~ 已完成。
+2. ~~实现 `ModelRegistry`。~~ 已完成。
+3. ~~支持 `registry.createClient(providerId, modelId)`。~~ 已完成。
+4. ~~增加 `evolving-agent models discover` CLI。~~ 已完成。
+5. ~~增加 `examples/providers/local-openai.json`。~~ 已完成。
+6. ~~增加 smoke benchmark 示例。~~ 已完成。
+
+当前下一批任务：
+
+1. 实现 mutating tools：`write_file`、`edit_file`、`bash`。
+2. 增加 benchmark / evolution report 导出。
+3. 增加 trace replay。
+4. 增加 evolution history store。
+5. 增加 candidate generator 示例。
 
 ## 12. 判断边界
 

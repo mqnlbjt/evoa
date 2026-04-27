@@ -1,4 +1,5 @@
 import type { ProviderFormat } from "../models/provider-types.js";
+import { parseToolProfile, type ToolProfile } from "../tools/profiles.js";
 
 export type OutputFormat = "human" | "json";
 
@@ -27,6 +28,7 @@ export interface RunCommand extends BaseCommand {
 	baseURL: string;
 	apiKey?: string;
 	providerFormat: ProviderFormat;
+	toolProfile: ToolProfile;
 }
 
 export interface BenchmarkCommand extends BaseCommand {
@@ -38,6 +40,7 @@ export interface BenchmarkCommand extends BaseCommand {
 	baseURL: string;
 	apiKey?: string;
 	providerFormat: ProviderFormat;
+	toolProfile: ToolProfile;
 }
 
 export interface HelpCommand {
@@ -52,7 +55,7 @@ export interface ParseResult {
 
 type FlagValues = Record<string, string | boolean>;
 
-const valueFlags = new Set(["--provider", "--model", "--base-url", "--api-key", "--provider-format", "--format", "--output", "--trace", "--agent", "--task", "--suite"]);
+const valueFlags = new Set(["--provider", "--model", "--base-url", "--api-key", "--provider-format", "--tool-profile", "--format", "--output", "--trace", "--agent", "--task", "--suite"]);
 const booleanFlags = new Set(["--json", "--help"]);
 
 export function parseCliArgs(args: string[]): ParseResult {
@@ -88,8 +91,8 @@ export function helpText(): string {
 
 Usage:
   evolving-agent models discover --provider <id> --base-url <url> [--api-key <key>] [--json]
-  evolving-agent run --agent <file> --task <file> --provider <id> --model <id> --base-url <url> [--api-key <key>] [--json]
-  evolving-agent benchmark --suite <file> --agent <file> --provider <id> --model <id> --base-url <url> [--api-key <key>] [--json]
+  evolving-agent run --agent <file> --task <file> --provider <id> --model <id> --base-url <url> [--api-key <key>] [--tool-profile <profile>] [--json]
+  evolving-agent benchmark --suite <file> --agent <file> --provider <id> --model <id> --base-url <url> [--api-key <key>] [--tool-profile <profile>] [--json]
 
 Options:
   --provider <id>
@@ -97,6 +100,7 @@ Options:
   --base-url <url>
   --api-key <key>
   --provider-format <openai-responses|anthropic-messages>
+  --tool-profile <read-only|coding|benchmark-sandbox|dangerous>
   --format <human|json>
   --json
   --output <file>
@@ -192,6 +196,7 @@ function buildRun(flags: FlagValues, common: BaseCommand & { providerFormat: Pro
 	const baseURL = requireFlag(flags, "--base-url", diagnostics);
 	if (!agentPath || !taskPath || !provider || !model || !baseURL) return undefined;
 	const apiKey = apiKeyFlag(flags);
+	const toolProfile = toolProfileFlag(flags, diagnostics);
 	return {
 		kind: "run",
 		agentPath,
@@ -200,6 +205,7 @@ function buildRun(flags: FlagValues, common: BaseCommand & { providerFormat: Pro
 		model,
 		baseURL,
 		providerFormat: common.providerFormat,
+		toolProfile,
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
@@ -219,6 +225,7 @@ function buildBenchmark(
 	const baseURL = requireFlag(flags, "--base-url", diagnostics);
 	if (!agentPath || !suitePath || !provider || !model || !baseURL) return undefined;
 	const apiKey = apiKeyFlag(flags);
+	const toolProfile = toolProfileFlag(flags, diagnostics);
 	return {
 		kind: "benchmark",
 		agentPath,
@@ -227,6 +234,7 @@ function buildBenchmark(
 		model,
 		baseURL,
 		providerFormat: common.providerFormat,
+		toolProfile,
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
@@ -240,6 +248,15 @@ function parseCommandResult(command: CliCommand | undefined, diagnostics: string
 
 function apiKeyFlag(flags: FlagValues): string | undefined {
 	return stringFlag(flags, "--api-key");
+}
+
+function toolProfileFlag(flags: FlagValues, diagnostics: string[]): ToolProfile {
+	const value = stringFlag(flags, "--tool-profile");
+	if (value === undefined) return "read-only";
+	const profile = parseToolProfile(value);
+	if (profile) return profile;
+	diagnostics.push("--tool-profile must be read-only, coding, benchmark-sandbox, or dangerous");
+	return "read-only";
 }
 
 function parseProviderFormat(value: string, diagnostics: string[]): ProviderFormat {

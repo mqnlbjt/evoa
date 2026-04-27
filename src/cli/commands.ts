@@ -12,7 +12,7 @@ import type { AgentSpec } from "../specs.js";
 import type { BenchmarkCommand, ModelsDiscoverCommand, RunCommand } from "./args.js";
 import { formatPercent, formatTable } from "./format.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { createReadOnlyToolRegistry } from "../tools/read-only.js";
+import { createToolRegistryForProfile } from "../tools/profiles.js";
 
 export interface CliDeps {
 	stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -84,7 +84,7 @@ function createRunner(command: RunCommand | BenchmarkCommand, deps: CliDeps): Be
 	return new BenchmarkRunner({
 		runtime: new AgentRuntime({
 			modelClient: registry.createClient(command.provider, command.model),
-			toolRegistry: deps.toolRegistry ?? createReadOnlyToolRegistry({ workspaceRoot: deps.workspaceRoot ?? process.cwd() }),
+			toolRegistry: deps.toolRegistry ?? createToolRegistryForProfile({ profile: command.toolProfile, workspaceRoot: deps.workspaceRoot ?? process.cwd() }),
 		}),
 		grader: new MinimalTaskGrader(),
 		...(deps.now ? { now: deps.now } : {}),
