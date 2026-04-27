@@ -11,6 +11,10 @@ export function decideToolUse(agent: AgentSpec, task: TaskSpec, tool: EvolvingAg
 		return { decision: "deny", reason: "agent permission mode denies all tools" };
 	}
 
+	if (agent.tools.permissionMode === "ask") {
+		return { decision: "deny", reason: "ask permission is unsupported in non-interactive benchmark mode" };
+	}
+
 	if (agent.tools.deniedTools?.includes(tool.name)) {
 		return { decision: "deny", reason: `tool ${tool.name} is denied by agent policy` };
 	}
@@ -23,12 +27,22 @@ export function decideToolUse(agent: AgentSpec, task: TaskSpec, tool: EvolvingAg
 		return { decision: "deny", reason: `tool ${tool.name} is not allowed for task ${task.id}` };
 	}
 
+	if (tool.permission.defaultDecision === "ask") {
+		return { decision: "deny", reason: "ask permission is unsupported in non-interactive benchmark mode" };
+	}
+
 	return { decision: tool.permission.defaultDecision, reason: `tool default decision is ${tool.permission.defaultDecision}` };
 }
 
-export function assertToolCallLimit(agent: AgentSpec, currentToolCalls: number): void {
+export function toolCallLimitDecision(agent: AgentSpec, currentToolCalls: number): ToolDecision | undefined {
 	const maxToolCalls = agent.tools.maxToolCalls;
 	if (maxToolCalls !== undefined && currentToolCalls >= maxToolCalls) {
-		throw new Error(`max tool calls exceeded: ${maxToolCalls}`);
+		return { decision: "deny", reason: `max tool calls exceeded: ${maxToolCalls}` };
 	}
+	return undefined;
+}
+
+export function assertToolCallLimit(agent: AgentSpec, currentToolCalls: number): void {
+	const decision = toolCallLimitDecision(agent, currentToolCalls);
+	if (decision) throw new Error(decision.reason);
 }

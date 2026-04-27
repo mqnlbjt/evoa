@@ -1,8 +1,22 @@
 import type { AgentSpec, TaskSpec } from "../specs.js";
 
+export type ModelContentBlock =
+	| { type: "text"; text: string }
+	| { type: "tool_call"; id: string; name: string; input?: unknown }
+	| { type: "tool_result"; toolCallId: string; toolName?: string; content: string; isError?: boolean };
+
 export interface ModelMessage {
 	role: "system" | "user" | "assistant" | "tool";
 	content: string;
+	contentBlocks?: ModelContentBlock[];
+	toolCallId?: string;
+	toolName?: string;
+}
+
+export interface ModelToolDefinition {
+	name: string;
+	description: string;
+	inputSchema?: unknown;
 }
 
 export interface ModelToolCall {
@@ -16,6 +30,7 @@ export interface ModelRequest {
 	task: TaskSpec;
 	messages: ModelMessage[];
 	turn: number;
+	tools?: ModelToolDefinition[];
 }
 
 export interface ModelResponse {

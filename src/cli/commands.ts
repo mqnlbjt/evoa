@@ -11,12 +11,16 @@ import { loadTaskSpecFromFile } from "../tasks/loader.js";
 import type { AgentSpec } from "../specs.js";
 import type { BenchmarkCommand, ModelsDiscoverCommand, RunCommand } from "./args.js";
 import { formatPercent, formatTable } from "./format.js";
+import type { ToolRegistry } from "../tools/registry.js";
+import { createReadOnlyToolRegistry } from "../tools/read-only.js";
 
 export interface CliDeps {
 	stdout?: Pick<NodeJS.WriteStream, "write">;
 	stderr?: Pick<NodeJS.WriteStream, "write">;
 	fetchFn?: typeof fetch;
 	openAIClientFactory?: ModelRegistryOptions["openAIClientFactory"];
+	toolRegistry?: ToolRegistry;
+	workspaceRoot?: string;
 	now?: () => number;
 	createId?: () => string;
 }
@@ -78,7 +82,10 @@ function createRunner(command: RunCommand | BenchmarkCommand, deps: CliDeps): Be
 		format: command.providerFormat,
 	});
 	return new BenchmarkRunner({
-		runtime: new AgentRuntime({ modelClient: registry.createClient(command.provider, command.model) }),
+		runtime: new AgentRuntime({
+			modelClient: registry.createClient(command.provider, command.model),
+			toolRegistry: deps.toolRegistry ?? createReadOnlyToolRegistry({ workspaceRoot: deps.workspaceRoot ?? process.cwd() }),
+		}),
 		grader: new MinimalTaskGrader(),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),

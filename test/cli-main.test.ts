@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli/main.js";
 import type { OpenAIResponsesClient } from "../src/models/openai-client.js";
@@ -76,6 +79,48 @@ describe("CLI main", () => {
 		expect(code).toBe(0);
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "benchmark", summary: { totalTasks: 1, passedTasks: 1, passRate: 1 } });
 	});
+
+	it("runs a task through the default read-only tool registry", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const agentFile = path.join(root, "agent.json");
+		const taskFile = path.join(root, "task.json");
+		await writeFile(path.join(root, "note.txt"), "tool result");
+		await writeFile(agentFile, JSON.stringify({
+			id: "tool-agent",
+			version: "1.0.0",
+			name: "Tool Agent",
+			kind: "baseline",
+			model: { provider: "local", model: "gpt-5.4-mini" },
+			prompts: { system: "Read files." },
+			tools: { allowedTools: ["read_file"], permissionMode: "allow", maxToolCalls: 2 },
+			runtime: { maxTurns: 3 },
+		}));
+		await writeFile(taskFile, JSON.stringify({
+			id: "tool-task",
+			type: "general",
+			title: "Read note",
+			prompt: "Read note.txt",
+			scoring: { method: "rubric", config: { contains: ["saw tool"] } },
+		}));
+		const io = createIO();
+		const code = await main([
+			"run",
+			"--agent",
+			agentFile,
+			"--task",
+			taskFile,
+			"--provider",
+			"local",
+			"--model",
+			"gpt-5.4-mini",
+			"--base-url",
+			"http://localhost:8317/v1",
+			"--json",
+		], { ...io, openAIClientFactory: () => fakeToolOpenAIClient(), workspaceRoot: root, now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "run", status: "passed", score: { score: 1 } });
+	});
 });
 
 function createIO(): { stdout: { write: (chunk: string) => boolean }; stderr: { write: (chunk: string) => boolean }; stdoutText: () => string; stderrText: () => string } {
@@ -91,6 +136,21 @@ function createIO(): { stdout: { write: (chunk: string) => boolean }; stderr: { 
 
 function fakeOpenAIClient(answer: string): OpenAIResponsesClient {
 	return { responses: { async create() { return { output_text: answer }; } } };
+}
+
+function fakeToolOpenAIClient(): OpenAIResponsesClient {
+	let calls = 0;
+	return {
+		responses: {
+			async create() {
+				calls += 1;
+				if (calls === 1) {
+					return { output_text: "", output: [{ type: "function_call", call_id: "call_1", name: "read_file", arguments: "{\"path\":\"note.txt\"}" }] };
+				}
+				return { output_text: "saw tool" };
+			},
+		},
+	};
 }
 
 function nextId(): () => string {

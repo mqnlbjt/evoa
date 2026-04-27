@@ -173,7 +173,38 @@ model: gpt-5.4-mini
 response: ok
 ```
 
-### 9. 模型发现与轻量 ModelRegistry
+### 9. Provider-neutral Tool Call 历史
+
+新增/扩展：
+
+- `src/models/types.ts`
+- `src/runtime/loop.ts`
+- `src/models/openai-client.ts`
+- `src/models/anthropic-client.ts`
+- `test/agent-runtime.test.ts`
+- `test/openai-client.test.ts`
+- `test/anthropic-client.test.ts`
+
+当前能力：
+
+- `ModelMessage` 新增 `contentBlocks`，支持 provider-neutral：
+  - `text`
+  - `tool_call`
+  - `tool_result`
+- runtime 在模型返回 tool call 时，会先把 assistant tool-call turn 写入 session history，再执行工具。
+- tool result 同时保留原有 string content 和结构化 `tool_result` block。
+- OpenAI Responses client 可以把 assistant `tool_call` block 回放为 `function_call` input item。
+- OpenAI Responses client 继续把 tool result 回放为 `function_call_output`。
+- Anthropic Messages client 可以把 assistant `tool_call` block 回放为 assistant `tool_use` content block。
+- Anthropic Messages client 继续把 tool result 回放为 user `tool_result` content block。
+- 新增测试覆盖：
+  - tool-only assistant turn 不丢失。
+  - mixed text + tool call assistant turn 不丢失。
+  - OpenAI/Anthropic 第二轮 tool-call payload 可从 neutral history 重建。
+
+这一步吸收了 pi 的结构化 assistant/toolResult message 思路，也为后续 Claude Code 风格 subagent sidechain transcript、fork context 和 verifier replay 打基础。
+
+### 10. 模型发现与轻量 ModelRegistry
 
 新增：
 
@@ -192,7 +223,7 @@ response: ok
 - `ModelRegistry.createClient` 可创建 `openai-responses` 和 `anthropic-messages` 对应的现有 `ModelClient`。
 - Anthropic provider 当前支持手动注册和 client 创建，暂不支持自动模型发现。
 
-### 10. 最小 CLI 与示例文件
+### 11. 最小 CLI 与示例文件
 
 新增：
 
@@ -242,8 +273,8 @@ npm run build
 当前测试数量：
 
 ```txt
-17 test files
-55 tests passed
+18 test files
+71 tests passed
 ```
 
 ## 与 Claude Code 的区别

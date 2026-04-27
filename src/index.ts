@@ -21,6 +21,7 @@ export * from "./verification/verifier.js";
 export * from "./tools/types.js";
 export * from "./tools/policy.js";
 export * from "./tools/registry.js";
+export * from "./tools/read-only.js";
 export * from "./tasks/loader.js";
 export * from "./tasks/validation.js";
 export * from "./sessions/run-store.js";

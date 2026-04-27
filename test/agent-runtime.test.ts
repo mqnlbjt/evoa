@@ -40,8 +40,10 @@ describe("AgentRuntime", () => {
 
 	it("executes allowed tool calls and continues to the next turn", async () => {
 		let turn = 0;
+		const seenRequests: unknown[] = [];
 		const modelClient: ModelClient = {
-			async complete() {
+			async complete(request) {
+				seenRequests.push(request);
 				turn += 1;
 				if (turn === 1) {
 					return { text: "checking", toolCalls: [{ id: "call-1", name: "echo", input: "ok" }] };
@@ -67,6 +69,175 @@ describe("AgentRuntime", () => {
 		expect(output.answer).toBe("done");
 		expect(output.trace?.map((event) => event.type)).toContain("tool_call");
 		expect(output.trace?.map((event) => event.type)).toContain("tool_result");
+		expect(seenRequests[0]).toMatchObject({ tools: [{ name: "echo", description: "Echo input" }] });
+		expect(seenRequests[1]).toMatchObject({
+			messages: expect.arrayContaining([
+				{
+					role: "assistant",
+					content: "checking",
+					contentBlocks: [
+						{ type: "text", text: "checking" },
+						{ type: "tool_call", id: "call-1", name: "echo", input: "ok" },
+					],
+				},
+				{
+					role: "tool",
+					toolCallId: "call-1",
+					toolName: "echo",
+					content: "\"ok\"",
+					contentBlocks: [{ type: "tool_result", toolCallId: "call-1", toolName: "echo", content: "\"ok\"" }],
+				},
+			]),
+		});
+	});
+
+	it("preserves tool-only assistant turns before tool results", async () => {
+		let turn = 0;
+		const seenRequests: unknown[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenRequests.push(request);
+				turn += 1;
+				if (turn === 1) {
+					return { toolCalls: [{ id: "call-1", name: "echo", input: { value: "ok" } }] };
+				}
+				return { text: "done" };
+			},
+		};
+		const registry = new ToolRegistry([
+			{
+				name: "echo",
+				description: "Echo input",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				async execute(input) {
+					return input;
+				},
+			},
+		]);
+
+		await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask(agent, task);
+
+		expect(seenRequests[1]).toMatchObject({
+			messages: expect.arrayContaining([
+				{
+					role: "assistant",
+					content: "",
+					contentBlocks: [{ type: "tool_call", id: "call-1", name: "echo", input: { value: "ok" } }],
+				},
+			]),
+		});
+	});
+
+	it("normalizes large tool results before adding them to messages", async () => {
+		let turn = 0;
+		const seenRequests: unknown[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenRequests.push(request);
+				turn += 1;
+				if (turn === 1) return { toolCalls: [{ id: "call-1", name: "echo", input: "ok" }] };
+				return { text: "done" };
+			},
+		};
+		const registry = new ToolRegistry([
+			{
+				name: "echo",
+				description: "Echo input",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				maxResultBytes: 20,
+				async execute() {
+					return { value: "x".repeat(100) };
+				},
+			},
+		]);
+
+		await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask(agent, task);
+
+		expect(seenRequests[1]).toMatchObject({
+			messages: expect.arrayContaining([
+				expect.objectContaining({
+					role: "tool",
+					content: expect.stringContaining("truncated"),
+				}),
+			]),
+		});
+	});
+
+	it("runs consecutive parallel-safe tool calls concurrently while preserving result order", async () => {
+		let turn = 0;
+		const seenRequests: unknown[] = [];
+		const completions: string[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenRequests.push(request);
+				turn += 1;
+				if (turn === 1) {
+					return { toolCalls: [{ id: "call-1", name: "slow" }, { id: "call-2", name: "fast" }] };
+				}
+				return { text: "done" };
+			},
+		};
+		const registry = new ToolRegistry([
+			{
+				name: "slow",
+				description: "Slow",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				async execute() {
+					await new Promise((resolve) => setTimeout(resolve, 30));
+					completions.push("slow");
+					return "slow";
+				},
+			},
+			{
+				name: "fast",
+				description: "Fast",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				async execute() {
+					completions.push("fast");
+					return "fast";
+				},
+			},
+		]);
+
+		await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask({ ...agent, tools: { ...agent.tools, allowedTools: ["slow", "fast"], maxToolCalls: 2 } }, task);
+
+		expect(completions).toEqual(["fast", "slow"]);
+		expect(seenRequests[1]).toMatchObject({
+			messages: expect.arrayContaining([
+				expect.objectContaining({ role: "tool", toolCallId: "call-1", content: "\"slow\"" }),
+				expect.objectContaining({ role: "tool", toolCallId: "call-2", content: "\"fast\"" }),
+			]),
+		});
+	});
+
+	it("does not expose denied tools to the model", async () => {
+		let captured: unknown;
+		const modelClient: ModelClient = {
+			async complete(request) {
+				captured = request;
+				return { text: "done" };
+			},
+		};
+		const registry = new ToolRegistry([
+			{
+				name: "echo",
+				description: "Echo input",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				async execute(input) {
+					return input;
+				},
+			},
+		]);
+		const deniedAgent = { ...agent, tools: { ...agent.tools, deniedTools: ["echo"] } };
+
+		await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask(deniedAgent, task);
+
+		expect(captured).not.toHaveProperty("tools");
 	});
 });
 

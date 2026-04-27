@@ -65,4 +65,104 @@ describe("AnthropicModelClient", () => {
 			messages: [{ role: "user", content: "Say hi" }],
 		});
 	});
+
+	it("sends tools and formats tool results for the Messages API", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({
+			agent,
+			task,
+			turn: 2,
+			messages: [
+				{ role: "system", content: agent.prompts.system },
+				{ role: "user", content: task.prompt },
+				{ role: "tool", toolCallId: "toolu_1", toolName: "read_file", content: "{\"content\":\"ok\"}" },
+			],
+			tools: [{ name: "read_file", description: "Read file", inputSchema: { type: "object" } }],
+		});
+
+		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
+			tools: [{ name: "read_file", description: "Read file", input_schema: { type: "object" } }],
+			messages: [
+				{ role: "user", content: "Say hi" },
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "{\"content\":\"ok\"}" }] },
+			],
+		});
+	});
+
+	it("formats assistant tool-call history for the Messages API", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({
+			agent,
+			task,
+			turn: 2,
+			messages: [
+				{ role: "user", content: task.prompt },
+				{
+					role: "assistant",
+					content: "checking",
+					contentBlocks: [
+						{ type: "text", text: "checking" },
+						{ type: "tool_call", id: "toolu_1", name: "read_file", input: { path: "README.md" } },
+					],
+				},
+				{ role: "tool", toolCallId: "toolu_1", toolName: "read_file", content: "{\"content\":\"ok\"}" },
+			],
+		});
+
+		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
+			messages: [
+				{ role: "user", content: "Say hi" },
+				{
+					role: "assistant",
+					content: [
+						{ type: "text", text: "checking" },
+						{ type: "tool_use", id: "toolu_1", name: "read_file", input: { path: "README.md" } },
+					],
+				},
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "{\"content\":\"ok\"}" }] },
+			],
+		});
+	});
+
+	it("parses tool_use blocks into tool calls", async () => {
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async () => new Response(
+				JSON.stringify({
+					content: [
+						{ type: "text", text: "checking" },
+						{ type: "tool_use", id: "toolu_1", name: "read_file", input: { path: "README.md" } },
+					],
+					stop_reason: "tool_use",
+				}),
+				{ status: 200 },
+			),
+		});
+
+		const response = await client.complete({
+			agent,
+			task,
+			turn: 1,
+			messages: [{ role: "user", content: task.prompt }],
+		});
+
+		expect(response.text).toBe("checking");
+		expect(response.toolCalls).toEqual([{ id: "toolu_1", name: "read_file", input: { path: "README.md" } }]);
+	});
 });

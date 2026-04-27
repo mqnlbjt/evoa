@@ -14,6 +14,8 @@ export interface EvolvingAgentTool<TInput = unknown, TOutput = unknown> {
 	inputSchema?: unknown;
 	permission: ToolPermissionPolicy;
 	concurrency: ToolConcurrency;
+	timeoutMs?: number;
+	maxResultBytes?: number;
 	metadata?: Record<string, unknown>;
 	execute(input: TInput, signal?: AbortSignal): Promise<TOutput>;
 }
