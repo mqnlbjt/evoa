@@ -1,0 +1,18 @@
+{
+	"id": "smoke-task",
+	"type": "general",
+	"title": "Smoke exact answer",
+	"prompt": "Reply with exactly: pong",
+	"scoring": {
+		"method": "exact",
+		"maxScore": 1,
+		"config": {
+			"expected": "pong",
+			"trim": true,
+			"caseSensitive": true
+		}
+	},
+	"metadata": {
+		"example": true
+	}
+}

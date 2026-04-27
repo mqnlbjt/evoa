@@ -1,0 +1,6 @@
+{
+	"id": "local",
+	"baseURL": "http://localhost:8317/v1",
+	"format": "openai-responses",
+	"apiKey": "12345678"
+}

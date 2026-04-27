@@ -1,0 +1,26 @@
+{
+	"id": "basic",
+	"version": "1.0.0",
+	"name": "Basic Agent",
+	"kind": "baseline",
+	"model": {
+		"provider": "local",
+		"model": "gpt-5.4-mini"
+	},
+	"prompts": {
+		"system": "You are a concise agent. Answer the user's task directly and do not add extra commentary."
+	},
+	"tools": {
+		"allowedTools": [],
+		"permissionMode": "allow",
+		"maxToolCalls": 0
+	},
+	"runtime": {
+		"maxTurns": 1,
+		"contextCompression": "off",
+		"memoryPolicy": "none"
+	},
+	"metadata": {
+		"example": true
+	}
+}
