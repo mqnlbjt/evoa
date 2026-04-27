@@ -39,4 +39,18 @@ node dist/cli.js benchmark \
   --api-key 12345678
 ```
 
+Generate deterministic evolution candidates from a baseline agent:
+
+```js
+import { loadAgentSpecFromFile, loadDeterministicCandidateGeneratorFromFile } from "./dist/index.js";
+
+const agent = await loadAgentSpecFromFile("examples/agents/basic.json");
+const generator = await loadDeterministicCandidateGeneratorFromFile("examples/generators/deterministic-smoke.json");
+const candidates = await generator.generate(agent);
+
+console.log(JSON.stringify(candidates, null, 2));
+```
+
+The deterministic generator does not call a model. It only materializes candidate agent specs that can be passed to the existing evolution engine or saved as candidate agent JSON.
+
 Add `--json` to any command for machine-readable output.

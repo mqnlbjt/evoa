@@ -18,6 +18,8 @@ export * from "./benchmark/validation.js";
 export * from "./benchmark/grader.js";
 export * from "./evolution/types.js";
 export * from "./evolution/engine.js";
+export * from "./evolution/deterministic-generator.js";
+export * from "./evolution/deterministic-generator-loader.js";
 export * from "./verification/verifier.js";
 export * from "./tools/types.js";
 export * from "./tools/policy.js";

@@ -1,0 +1,19 @@
+{
+  "candidateIdPrefix": "basic",
+  "mutations": [
+    {
+      "id": "exact-answer",
+      "kind": "system-prompt-append",
+      "description": "Prefer exact benchmark answers.",
+      "text": "When a task asks for an exact token, answer with only that token."
+    },
+    {
+      "id": "deterministic-temperature",
+      "kind": "model-options-merge",
+      "description": "Set deterministic model options for reproducible examples.",
+      "options": {
+        "temperature": 0
+      }
+    }
+  ]
+}
