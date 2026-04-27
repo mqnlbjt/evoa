@@ -274,6 +274,21 @@ pi 的优势是 runtime/session/model 分层清晰，模型 provider 和 coding 
 5. Local-first：优先支持本地 OpenAI/Anthropic 兼容服务。
 6. Lightweight：不引入 Claude Code/pi 的完整产品复杂度。
 7. Composable：runtime、model、tool、benchmark、evolution 可以独立演进。
+8. Practice-informed planning：每一次进入 plan 阶段时，都必须主动探索并参考 pi 与 Claude Code 的优秀实践，再把相关取舍写入计划。
+
+### 5.1 Plan 阶段要求
+
+每次规划新功能或较大改动时，plan 必须包含以下步骤：
+
+1. 探索当前 `evolving-agent` 代码和需求上下文，确认已有能力与缺口。
+2. 探索 pi 中相关模块的优秀实践，尤其关注 runtime/session/model/provider/tool/CLI/benchmark 的工程实现。
+3. 探索 Claude Code 的相关优秀实践，尤其关注 agent workflow、权限、安全边界、配置、CLI UX、verification 和可自动化运行方式。
+4. 在计划中明确写出：
+   - 借鉴了 pi 的哪些实践。
+   - 借鉴了 Claude Code 的哪些实践。
+   - 哪些实践本阶段不照搬，以及不照搬的原因。
+   - 本阶段的最小实现范围与明确延期内容。
+5. 如果 pi 或 Claude Code 的实践与本项目 lightweight / benchmark-first 目标冲突，必须优先保持 `evolving-agent` 轻量、独立、可评测。
 
 ## 6. 目标架构
 

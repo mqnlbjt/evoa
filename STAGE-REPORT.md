@@ -192,6 +192,43 @@ response: ok
 - `ModelRegistry.createClient` 可创建 `openai-responses` 和 `anthropic-messages` 对应的现有 `ModelClient`。
 - Anthropic provider 当前支持手动注册和 client 创建，暂不支持自动模型发现。
 
+### 10. 最小 CLI 与示例文件
+
+新增：
+
+- `src/cli.ts`
+- `src/cli/args.ts`
+- `src/cli/main.ts`
+- `src/cli/commands.ts`
+- `src/cli/format.ts`
+- `src/tasks/loader.ts`
+- `src/tasks/validation.ts`
+- `src/benchmark/loader.ts`
+- `src/benchmark/validation.ts`
+- `src/benchmark/grader.ts`
+- `examples/agents/basic.json`
+- `examples/tasks/smoke.json`
+- `examples/suites/smoke.json`
+- `examples/providers/local-openai.json`
+- `examples/README.md`
+- `test/cli-args.test.ts`
+- `test/cli-main.test.ts`
+- `test/task-loader.test.ts`
+- `test/benchmark-loader.test.ts`
+- `test/minimal-grader.test.ts`
+- `test/examples.test.ts`
+
+当前能力：
+
+- `evolving-agent models discover` 可通过 CLI 发现 OpenAI-compatible provider 的模型。
+- `evolving-agent run` 可加载 agent/task JSON，创建模型客户端并运行单个 task。
+- `evolving-agent benchmark` 可加载 suite/agent JSON 并运行 benchmark。
+- CLI 支持 human/json 输出，`--json` 输出稳定机器可读 JSON。
+- CLI 支持 `--output` 和 `--trace` 显式写文件，默认不写。
+- 新增 task/suite loader 与 validator。
+- 新增 `MinimalTaskGrader`，支持 deterministic `exact` 与 `rubric.contains`。
+- 示例文件覆盖 local provider、basic agent、smoke task 和 smoke suite。
+
 ## 当前测试状态
 
 已通过：
@@ -205,8 +242,8 @@ npm run build
 当前测试数量：
 
 ```txt
-11 test files
-32 tests passed
+17 test files
+55 tests passed
 ```
 
 ## 与 Claude Code 的区别
@@ -231,6 +268,8 @@ Claude Code 具备：
 
 - runtime loop。
 - model client。
+- model registry。
+- 最小 CLI。
 - tool registry。
 - benchmark。
 - evolution comparison。
@@ -238,7 +277,7 @@ Claude Code 具备：
 
 还没有：
 
-- CLI/TUI。
+- TUI。
 - 真正的代码编辑工具集。
 - MCP。
 - hooks。
@@ -332,10 +371,8 @@ ModelRegistry
 
 优先级较高：
 
-1. CLI：运行 benchmark、指定 agent/suite/model/baseURL/key。
-2. 示例文件：agents、suites、local endpoint config。
-3. 基础 coding tools：read、write、bash、edit。
-4. tool call 协议：让 OpenAI/Anthropic client 可以解析模型返回的工具调用。
+1. 基础 coding tools：read、write、bash、edit。
+2. tool call 协议：让 OpenAI/Anthropic client 可以解析模型返回的工具调用。
 
 优先级中等：
 
@@ -357,21 +394,14 @@ ModelRegistry
 
 ## 建议下一阶段
 
-建议下一阶段实现最小 CLI 与示例文件。
+建议下一阶段实现 tool call 协议与基础 coding tools。
 
 目标：
 
-```bash
-evolving-agent models discover --provider local --base-url http://localhost:8317/v1 --api-key 12345678
-evolving-agent run --agent examples/agents/basic.json --task examples/tasks/smoke.json --provider local --model gpt-5.4-mini
-evolving-agent benchmark --suite examples/suites/smoke.json --agent examples/agents/basic.json --provider local --model gpt-5.4-mini
-```
+- OpenAI Responses client 可以解析模型返回的 tool call。
+- Anthropic Messages client 可以解析 `tool_use`。
+- runtime 可以把 tool result 按 provider 格式回传给模型。
+- 新增 read-only tools：`read_file`、`grep`、`find_files`、`list_dir`。
+- 后续再加入 mutating tools：`write_file`、`edit_file`、`bash`。
 
-建议先实现：
-
-- `models discover`：调用 `ModelRegistry` / `discoverOpenAICompatibleModels` 输出可用模型。
-- `run`：加载 agent/task JSON，创建模型客户端，运行单个 task。
-- `benchmark`：加载 suite/agent，运行 benchmark。
-- 示例文件：local provider、basic agent、smoke task/suite。
-
-这样可以把当前 runtime、model client、ModelRegistry、benchmark 串成可从命令行使用的最小闭环。
+这样可以把当前 CLI/runtime/model/tool registry 从“文本任务闭环”推进到“可执行工具调用的 agent 闭环”。
