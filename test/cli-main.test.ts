@@ -343,7 +343,7 @@ describe("CLI main", () => {
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "diff", diff: { classification: "improvement", scoreDelta: 1 } });
 	});
 
-	it("runs a task through the default read-only tool registry", async () => {
+	it("runs a task through the default full tool registry", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
 		const agentFile = path.join(root, "agent.json");
 		const taskFile = path.join(root, "task.json");
@@ -385,7 +385,7 @@ describe("CLI main", () => {
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "run", status: "passed", score: { score: 1 } });
 	});
 
-	it("does not expose mutating tools by default", async () => {
+	it("exposes mutating tools by default", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
 		const agentFile = path.join(root, "agent.json");
 		const taskFile = path.join(root, "task.json");
@@ -395,7 +395,7 @@ describe("CLI main", () => {
 			"run", "--agent", agentFile, "--task", taskFile, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--json",
 		], { ...io, openAIClientFactory: () => inspectingToolClient(), workspaceRoot: root, now: () => 1, createId: nextId() });
 
-		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, status: "failed" });
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, status: "passed" });
 	});
 
 	it("exposes mutating tools with the coding profile", async () => {

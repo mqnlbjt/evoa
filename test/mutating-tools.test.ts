@@ -198,14 +198,14 @@ describe("tool profiles", () => {
 		const root = await fixtureRoot();
 		const registry = createToolRegistryForProfile({ workspaceRoot: root });
 
-		expect(registry.list().map((tool) => tool.name)).toEqual(["read_file", "list_dir", "find_files", "grep"]);
+		expect(registry.list().map((tool) => tool.name)).toEqual(["read_file", "list_dir", "find_files", "grep", "web_fetch"]);
 	});
 
 	it("exposes coding tools without bash", async () => {
 		const root = await fixtureRoot();
 		const registry = createToolRegistryForProfile({ profile: "coding", workspaceRoot: root });
 
-		expect(registry.list().map((tool) => tool.name)).toEqual(["read_file", "list_dir", "find_files", "grep", "write_file", "edit_file"]);
+		expect(registry.list().map((tool) => tool.name)).toEqual(["read_file", "list_dir", "find_files", "grep", "web_fetch", "write_file", "edit_file"]);
 	});
 });
 

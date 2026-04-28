@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli/main.js";
+import type { FetchResponseLike } from "../src/tools/web-fetch.js";
 import { createIO, fakeToolOpenAIClient, nextId } from "./helpers/cli.js";
 
 const modelArgs = ["--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1"];
@@ -61,11 +62,11 @@ describe("chat tool regression", () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-tools-"));
 		const agentFile = path.join(root, "agent.json");
 		const traceFile = path.join(root, "trace.json");
-		await writeAgent(agentFile, ["write_file"]);
+		await writeAgent(agentFile, ["missing_tool"]);
 		const io = createIO();
-		const code = await main(["chat", "write note", "--agent", agentFile, ...modelArgs, "--trace", traceFile, "--json"], {
+		const code = await main(["chat", "use missing tool", "--agent", agentFile, ...modelArgs, "--trace", traceFile, "--json"], {
 			...io,
-			openAIClientFactory: () => fakeToolOpenAIClient("write_file", { path: "note.txt", content: "new" }, "done"),
+			openAIClientFactory: () => fakeToolOpenAIClient("missing_tool", {}, "done"),
 			workspaceRoot: root,
 			now: () => 1,
 			createId: nextId(),
@@ -74,7 +75,31 @@ describe("chat tool regression", () => {
 		expect(code).toBe(0);
 		const trace = await readTrace(traceFile);
 		expect(trace.trace).toEqual(expect.arrayContaining([
-			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "unknown", errorMessage: "Unknown tool: write_file" }) }),
+			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "unknown", errorMessage: "Unknown tool: missing_tool" }) }),
+		]));
+	});
+
+	it("records web_fetch tool success in chat trace", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-tools-"));
+		const agentFile = path.join(root, "agent.json");
+		const traceFile = path.join(root, "trace.json");
+		await writeAgent(agentFile, ["web_fetch"]);
+		const io = createIO();
+		const code = await main(["chat", "fetch page", "--agent", agentFile, ...modelArgs, "--trace", traceFile, "--json"], {
+			...io,
+			fetchFn: mockFetch("<html><body><h1>Fetched</h1></body></html>"),
+			openAIClientFactory: () => fakeToolOpenAIClient("web_fetch", { url: "https://example.com/page" }, "fetched page"),
+			workspaceRoot: root,
+			now: () => 1,
+			createId: nextId(),
+		});
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, answer: "fetched page" });
+		const trace = await readTrace(traceFile);
+		expect(trace.trace).toEqual(expect.arrayContaining([
+			expect.objectContaining({ type: "tool_call", payload: expect.objectContaining({ call: expect.objectContaining({ name: "web_fetch" }) }) }),
+			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", output: expect.objectContaining({ markdown: "# Fetched" }) }) }),
 		]));
 	});
 });
@@ -95,6 +120,16 @@ async function writeAgent(filePath: string, allowedTools: string[], deniedTools?
 interface TestTraceEvent {
 	type: string;
 	payload: { messages: Array<{ role?: string; contentBlocks?: unknown[] }> };
+}
+
+function mockFetch(body: string): typeof fetch {
+	return async () => ({
+		status: 200,
+		statusText: "OK",
+		url: "https://example.com/page",
+		headers: { get: (name: string) => name.toLowerCase() === "content-type" ? "text/html" : null },
+		async text() { return body; },
+	} satisfies FetchResponseLike) as Response;
 }
 
 async function readTrace(filePath: string): Promise<{ trace: unknown[] }> {

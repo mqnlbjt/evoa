@@ -302,7 +302,7 @@ function createRuntime(command: ResolvedChatCommand | RunCommand | BenchmarkComm
 		providerId: command.provider,
 		format: command.providerFormat,
 	});
-	const createToolRegistryForAgent = () => deps.toolRegistry ?? createToolRegistryForProfile({ profile: command.toolProfile, workspaceRoot: deps.workspaceRoot ?? process.cwd() });
+	const createToolRegistryForAgent = () => deps.toolRegistry ?? createToolRegistryForProfile({ profile: command.toolProfile, workspaceRoot: deps.workspaceRoot ?? process.cwd(), ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}) });
 	return new AgentRuntime({
 		modelClient: registry.createClient(command.provider, command.model),
 		toolRegistry: createToolRegistryForAgent(),

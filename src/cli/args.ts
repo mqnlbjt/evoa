@@ -483,11 +483,11 @@ function apiKeyFlag(flags: FlagValues): string | undefined {
 
 function toolProfileFlag(flags: FlagValues, defaults: CliDefaults, diagnostics: string[]): ToolProfile {
 	const value = optionValue(flags, "--tool-profile", defaults.toolProfile);
-	if (value === undefined) return "read-only";
+	if (value === undefined) return "dangerous";
 	const profile = parseToolProfile(value);
 	if (profile) return profile;
 	diagnostics.push("--tool-profile must be read-only, coding, benchmark-sandbox, or dangerous");
-	return "read-only";
+	return "dangerous";
 }
 
 function reportFormatFlag(flags: FlagValues, reportPath: string | undefined, diagnostics: string[]): BenchmarkReportFormat {

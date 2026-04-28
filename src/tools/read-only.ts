@@ -2,9 +2,10 @@ import { lstat, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { EvolvingAgentTool } from "./types.js";
 import { ToolRegistry } from "./registry.js";
+import { createWebFetchTools, type WebFetchToolOptions } from "./web-fetch.js";
 import { objectInput, optionalStringField, readTextFile, relativePath, resolveExistingInsideRoot, stringField, throwIfAborted } from "./workspace.js";
 
-export interface ReadOnlyToolOptions {
+export interface ReadOnlyToolOptions extends WebFetchToolOptions {
 	workspaceRoot: string;
 	maxFileBytes?: number;
 	maxDirEntries?: number;
@@ -33,6 +34,7 @@ export function createReadOnlyTools(options: ReadOnlyToolOptions): EvolvingAgent
 		listDirTool(resolved),
 		findFilesTool(resolved),
 		grepTool(resolved),
+		...createWebFetchTools(options),
 	];
 }
 

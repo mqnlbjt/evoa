@@ -43,7 +43,7 @@ describe("chat session regression", () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
 		const first = createIO();
 		await main(["chat", "remember", ...modelArgs, "--session", "demo", "--session-dir", root, "--json"], { ...first, openAIClientFactory: () => fakeOpenAIClient("stored"), now: () => 1, createId: nextId() });
-		expect(await readSession(root, "demo")).toMatchObject({ startupContext: { agentPath, provider: "local", model: "gpt-5.4-mini", baseURL: "http://localhost:8317/v1", toolProfile: "read-only" } });
+		expect(await readSession(root, "demo")).toMatchObject({ startupContext: { agentPath, provider: "local", model: "gpt-5.4-mini", baseURL: "http://localhost:8317/v1", toolProfile: "dangerous" } });
 
 		let resumedRequest: unknown;
 		const second = createIO();
@@ -184,8 +184,10 @@ describe("chat session regression", () => {
 	it("reports old sessions without startup context when resume args are incomplete", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
 		await writeSession(root, "legacy", { id: "legacy", agentId: "agent", messages: [], createdAt: 1, updatedAt: 1 });
+		const configPath = path.join(root, "config.json");
+		await writeFile(configPath, "{}");
 		const io = createIO();
-		const code = await main(["chat", "recall", "--resume", "legacy", "--session-dir", root, "--json"], { ...io, openAIClientFactory: () => fakeOpenAIClient("recalled") });
+		const code = await main(["chat", "recall", "--resume", "legacy", "--session-dir", root, "--config", configPath, "--json"], { ...io, openAIClientFactory: () => fakeOpenAIClient("recalled") });
 
 		expect(code).toBe(1);
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: false, error: { code: "RUN_ERROR", message: "session legacy does not include startup context; provide --agent --provider --model --base-url once to upgrade it" } });

@@ -11,13 +11,13 @@ describe("parseCliArgs", () => {
 	it("parses chat", () => {
 		const result = parseCliArgs(["chat", "hello", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--session", "demo"]);
 		expect(result.diagnostics).toEqual([]);
-		expect(result.command).toMatchObject({ kind: "chat", prompt: "hello", agentPath: "agent.json", model: "model", sessionId: "demo", toolProfile: "read-only" });
+		expect(result.command).toMatchObject({ kind: "chat", prompt: "hello", agentPath: "agent.json", model: "model", sessionId: "demo", toolProfile: "dangerous" });
 	});
 
 	it("parses chat without prompt for interactive REPL", () => {
 		const result = parseCliArgs(["chat", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url"]);
 		expect(result.diagnostics).toEqual([]);
-		expect(result.command).toMatchObject({ kind: "chat", agentPath: "agent.json", model: "model", toolProfile: "read-only" });
+		expect(result.command).toMatchObject({ kind: "chat", agentPath: "agent.json", model: "model", toolProfile: "dangerous" });
 		expect(result.command).not.toHaveProperty("prompt");
 	});
 
@@ -67,7 +67,7 @@ describe("parseCliArgs", () => {
 	it("parses run", () => {
 		const result = parseCliArgs(["run", "--agent", "agent.json", "--task", "task.json", "--provider", "local", "--model", "model", "--base-url", "url"]);
 		expect(result.diagnostics).toEqual([]);
-		expect(result.command).toMatchObject({ kind: "run", agentPath: "agent.json", taskPath: "task.json", model: "model", toolProfile: "read-only" });
+		expect(result.command).toMatchObject({ kind: "run", agentPath: "agent.json", taskPath: "task.json", model: "model", toolProfile: "dangerous" });
 	});
 
 	it("parses tool profiles", () => {
@@ -79,7 +79,7 @@ describe("parseCliArgs", () => {
 	it("reports invalid tool profiles", () => {
 		const result = parseCliArgs(["benchmark", "--suite", "suite.json", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--tool-profile", "wat"]);
 		expect(result.diagnostics.join(" ")).toContain("--tool-profile");
-		expect(result.command).toMatchObject({ kind: "benchmark", toolProfile: "read-only" });
+		expect(result.command).toMatchObject({ kind: "benchmark", toolProfile: "dangerous" });
 	});
 
 	it("parses benchmark", () => {

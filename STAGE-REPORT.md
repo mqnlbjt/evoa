@@ -277,7 +277,7 @@ response: ok
 - read-only profile 内置 `read_file`、`list_dir`、`find_files`、`grep`。
 - coding profile 额外启用 `write_file`、`edit_file`。
 - benchmark-sandbox / dangerous profile 额外启用 `bash`。
-- CLI 新增 `--tool-profile <read-only|coding|benchmark-sandbox|dangerous>`，默认仍是 `read-only`。
+- CLI 新增 `--tool-profile <read-only|coding|benchmark-sandbox|dangerous>`，默认是 `dangerous`，让默认 agent 具备全部内置工具能力。
 - 文件工具限制在 workspace root 内，拒绝路径逃逸和 symlink 写入。
 - `edit_file` 使用 exact replacement，支持 all-or-nothing 多编辑与 `replaceAll`。
 - `bash` 支持 workspace cwd 校验、超时、输出上限和非零退出码结构化返回。
@@ -489,9 +489,10 @@ ModelRegistry
 - session memory 可以保存/恢复 `AgentSession.messages`，支持 `--session` / `--resume`。
 - session startup context 可以保存并恢复 agent/provider/model/baseURL/toolProfile，减少 resume 参数。
 - 默认 CLI 配置可以减少启动 agent 时必须传的参数数量。
+- benchmark 已覆盖 runtime error、timeout、abort、tool profile、task-level narrowing、CLI 失败退出码、trace/report 输出和 subagent trace 链路，避免 chat/session/tool 关键路径回归。
 
 下一目标：
 
-- 用 benchmark 覆盖 chat/session/tool 的关键路径，避免回归。
+- 扩展 verification artifact，结构化保存失败原因、policy event、tool result 截断信息。
 
 这样可以把当前“可分析、可重放、可持续演化的 benchmark 闭环”调整为“可用 Agent → 可验证 Agent → 可演化 Agent”的主线。
