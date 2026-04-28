@@ -2,13 +2,13 @@
 
 ## 当前阶段目标
 
-本阶段目标是把 `evolving-agent` 从“Agent 规格 + Benchmark 骨架”推进到一个可以运行、可以评测、可以接入本地 OpenAI/Anthropic 兼容服务的最小 agent 框架。
+本阶段目标是把 `evolving-agent` 从“Agent 规格 + Benchmark 骨架”推进到一个可以直接启动、可以对话、可以保存 session、可以评测、可以接入本地 OpenAI/Anthropic 兼容服务的最小 agent runtime。
 
 参考方向：
 
 - 借鉴 Claude Code 的 agent 定义、权限控制、验证思路。
 - 借鉴 pi 的清晰 runtime/session/model 分层和 OpenAI/Anthropic provider 思路。
-- 保持 `evolving-agent` 自身轻量、独立、适合做 benchmark 和 agent evolution。
+- 保持 `evolving-agent` 自身轻量、独立，优先成为可用的 Agent runtime，再用 benchmark 和 evolution 做验证与改进。
 
 ## 已完成内容
 
@@ -254,6 +254,7 @@ response: ok
 - `evolving-agent models discover` 可通过 CLI 发现 OpenAI-compatible provider 的模型。
 - `evolving-agent run` 可加载 agent/task JSON，创建模型客户端并运行单个 task。
 - `evolving-agent benchmark` 可加载 suite/agent JSON 并运行 benchmark。
+- 当前还缺少面向用户的简单 `chat` 入口；用户开始对话仍需要 task JSON，这是下一阶段最高优先级。
 - CLI 支持 human/json 输出，`--json` 输出稳定机器可读 JSON。
 - CLI 支持 `--output` 和 `--trace` 显式写文件，默认不写。
 - 新增 task/suite loader 与 validator。
@@ -310,8 +311,8 @@ npm run build
 当前测试数量：
 
 ```txt
-21 test files
-110 tests passed
+25 test files
+127 tests passed
 ```
 
 ## 与 Claude Code 的区别
@@ -332,7 +333,7 @@ Claude Code 具备：
 
 ### evolving-agent 当前不是 Claude Code 替代品
 
-当前 `evolving-agent` 只有核心框架能力：
+当前 `evolving-agent` 只有核心框架能力，还不是顺手可用的对话型 Agent 产品：
 
 - runtime loop。
 - model client。
@@ -344,7 +345,15 @@ Claude Code 具备：
 - benchmark。
 - benchmark JSON/Markdown report export。
 - evolution comparison。
+- evolution JSON/Markdown report export。
+- evolution history store。
+- trace replay summary / warnings。
+- run diff。
 - verifier。
+- chat CLI / REPL。
+- session memory 保存/恢复。
+- session startup context resume。
+- 默认 CLI 配置。
 
 还没有：
 
@@ -355,7 +364,6 @@ Claude Code 具备：
 - skills。
 - background task。
 - worktree isolation。
-- agent resume。
 - multi-agent coordinator。
 
 ### 我们借鉴了 Claude Code 的部分
@@ -447,11 +455,12 @@ ModelRegistry
 
 优先级中等：
 
-1. JSONL trace replay。
-2. benchmark report 导出。
-3. verification artifact。
-4. subagent 手动调用。
-5. candidate generator 示例。
+1. ~~JSONL trace replay。~~ 已完成事件级 replay summary / warnings。
+2. ~~benchmark report 导出。~~ 已完成。
+3. ~~run diff。~~ 已完成 task/suite diff。
+4. verification artifact。
+5. subagent 手动调用。
+6. candidate generator 示例。
 
 优先级较低：
 
@@ -465,13 +474,24 @@ ModelRegistry
 
 ## 建议下一阶段
 
-建议下一阶段实现 evolution report 导出、evolution history 与 trace replay。
+建议下一阶段先实现 Agent 可用性闭环，再继续扩展 benchmark/evolution 能力。
 
-目标：
+已完成：
 
 - evolution comparison 可以导出稳定 JSON/Markdown report。
 - evolution comparison 可以保存历史记录并导出决策依据。
-- trace replay 可以基于已有 `RuntimeEvent` 重放模型/tool 交互。
-- verification artifact 可以把失败原因、policy event、tool result 截断信息结构化保存。
+- trace replay 可以基于已有 trace 生成事件级 summary / warnings。
+- run diff 可以比较 task/suite run 的状态、分数、耗时和事件差异。
+- deterministic candidate generator 可以产生可复现 candidate。
+- manual subagent tool 可以显式调用子 agent。
+- `chat` CLI 可以直接启动一次对话。
+- 交互式 chat 支持连续输入。
+- session memory 可以保存/恢复 `AgentSession.messages`，支持 `--session` / `--resume`。
+- session startup context 可以保存并恢复 agent/provider/model/baseURL/toolProfile，减少 resume 参数。
+- 默认 CLI 配置可以减少启动 agent 时必须传的参数数量。
 
-这样可以把当前“可执行工具调用的 agent 闭环”推进到“可分析、可重放、可持续演化的 benchmark 闭环”。
+下一目标：
+
+- 用 benchmark 覆盖 chat/session/tool 的关键路径，避免回归。
+
+这样可以把当前“可分析、可重放、可持续演化的 benchmark 闭环”调整为“可用 Agent → 可验证 Agent → 可演化 Agent”的主线。

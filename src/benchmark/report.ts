@@ -39,6 +39,18 @@ export interface BenchmarkTaskReport {
 	endedAt: string;
 	errorMessage?: string;
 	trace?: TraceEvent[];
+	subagentTraces?: BenchmarkSubagentTraceReport[];
+}
+
+export interface BenchmarkSubagentTraceReport {
+	subagentId: string;
+	agentId?: string;
+	taskId?: string;
+	parentToolCallId?: string;
+	eventCount: number;
+	toolCallCount: number;
+	errorCount: number;
+	trace?: TraceEvent[];
 }
 
 export function createBenchmarkReport(result: SuiteRunResult, options: BenchmarkReportOptions = {}): BenchmarkReport {
@@ -58,7 +70,9 @@ export function createBenchmarkReport(result: SuiteRunResult, options: Benchmark
 			kind: result.agent.kind,
 		},
 		summary: result.summary,
-		tasks: result.runs.map((run) => ({
+		tasks: result.runs.map((run) => {
+			const subagentTraces = extractSubagentTraceReports(run.trace, options);
+			return {
 			runId: run.runId,
 			taskId: run.task.id,
 			title: run.task.title,
@@ -70,7 +84,9 @@ export function createBenchmarkReport(result: SuiteRunResult, options: Benchmark
 			endedAt: new Date(run.endedAt).toISOString(),
 			...(run.errorMessage ? { errorMessage: run.errorMessage } : {}),
 			...(options.includeTrace ? { trace: run.trace } : {}),
-		})),
+			...(subagentTraces.length > 0 ? { subagentTraces } : {}),
+		};
+		}),
 	};
 }
 
@@ -107,6 +123,11 @@ export function formatBenchmarkReportMarkdown(report: BenchmarkReport): string {
 		"| --- | --- | --- | ---: | ---: | --- |",
 		...report.tasks.map((task) => `| ${escapeTable(task.taskId)} | ${escapeTable(task.type)} | ${escapeTable(task.status)} | ${task.score.score}/${task.score.maxScore} | ${task.durationMs}ms | ${escapeTable(task.score.reason)} |`),
 	];
+	const subagentRows = report.tasks.flatMap((task) => (task.subagentTraces ?? []).map((trace) => [task.taskId, trace.subagentId, String(trace.eventCount), String(trace.toolCallCount), String(trace.errorCount)]));
+	if (subagentRows.length > 0) {
+		lines.push("", "## Subagent Traces", "", "| Task | Subagent | Events | Tool Calls | Errors |", "| --- | --- | ---: | ---: | ---: |",
+			...subagentRows.map((row) => `| ${escapeTable(row[0]!)} | ${escapeTable(row[1]!)} | ${row[2]} | ${row[3]} | ${row[4]} |`));
+	}
 	const failures = report.tasks.filter((task) => task.errorMessage || task.status === "errored" || task.status === "timeout");
 	if (failures.length > 0) {
 		lines.push("", "## Errors", "");
@@ -115,6 +136,45 @@ export function formatBenchmarkReportMarkdown(report: BenchmarkReport): string {
 		}
 	}
 	return `${lines.join("\n")}\n`;
+}
+
+function extractSubagentTraceReports(trace: TraceEvent[], options: BenchmarkReportOptions): BenchmarkSubagentTraceReport[] {
+	return trace.flatMap((event) => {
+		if (event.type !== "tool_result") return [];
+		const output = toolResultOutput(event);
+		if (!isSubagentOutput(output)) return [];
+		return [{
+			subagentId: output.subagentId,
+			agentId: output.agentId,
+			taskId: output.taskId,
+			...(output.parentToolCallId ? { parentToolCallId: output.parentToolCallId } : event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
+			eventCount: output.trace.length,
+			toolCallCount: output.trace.filter((traceEvent) => traceEvent.type === "tool_call").length,
+			errorCount: output.trace.filter((traceEvent) => traceEvent.type === "error").length,
+			...(options.includeTrace ? { trace: output.trace } : {}),
+		}];
+	});
+}
+
+function toolResultOutput(event: TraceEvent): unknown {
+	const payload = isRecord(event.payload) ? event.payload : {};
+	return payload.output;
+}
+
+function isSubagentOutput(value: unknown): value is { subagentId: string; agentId: string; taskId: string; trace: TraceEvent[]; parentToolCallId?: string } {
+	return isRecord(value)
+		&& typeof value.subagentId === "string"
+		&& typeof value.agentId === "string"
+		&& typeof value.taskId === "string"
+		&& isTraceEvents(value.trace);
+}
+
+function isTraceEvents(value: unknown): value is TraceEvent[] {
+	return Array.isArray(value) && value.every((item) => isRecord(item) && typeof item.type === "string" && typeof item.timestamp === "number");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 function formatPercent(value: number): string {

@@ -35,6 +35,13 @@ describe("agent loader", () => {
 		expect(bundle.subagents[0]?.id).toBe("planner");
 	});
 
+	it("rejects duplicate subagent ids", () => {
+		expect(() => loadAgentDefinitions({ subagents: [
+			{ id: "planner", role: "planner", agent },
+			{ id: "planner", role: "critic", agent },
+		] })).toThrow("duplicate subagent id: planner");
+	});
+
 	it("rejects invalid runtime policy", () => {
 		expect(() => validateAgentSpec({ ...agent, runtime: { maxTurns: 0 } })).toThrow("runtime.maxTurns");
 	});

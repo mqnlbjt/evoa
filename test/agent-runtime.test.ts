@@ -214,6 +214,18 @@ describe("AgentRuntime", () => {
 		});
 	});
 
+	it("times out long running model requests", async () => {
+		const modelClient: ModelClient = {
+			async complete() {
+				await new Promise(() => undefined);
+				return { text: "never" };
+			},
+		};
+		const runtime = new AgentRuntime({ modelClient, createId: createIds(), now: () => 1 });
+
+		await expect(runtime.runTask({ ...agent, runtime: { maxTurns: 1, timeoutMs: 1 } }, task)).rejects.toThrow("timed out");
+	});
+
 	it("does not expose denied tools to the model", async () => {
 		let captured: unknown;
 		const modelClient: ModelClient = {

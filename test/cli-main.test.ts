@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli/main.js";
 import type { OpenAIResponsesClient } from "../src/models/openai-client.js";
+import { createIO, fakeOpenAIClient, fakeToolOpenAIClient, lines, nextId } from "./helpers/cli.js";
 
 const agentPath = "/home/wyq/data/pi/evolving-agent/examples/agents/basic.json";
 const taskPath = "/home/wyq/data/pi/evolving-agent/examples/tasks/smoke.json";
@@ -36,6 +37,144 @@ describe("CLI main", () => {
 
 		expect(code).toBe(2);
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: false, error: { code: "USAGE_ERROR" } });
+	});
+
+	it("runs chat as JSON with a fake OpenAI client", async () => {
+		const io = createIO();
+		const code = await main([
+			"chat",
+			"hello",
+			"--agent",
+			agentPath,
+			"--provider",
+			"local",
+			"--model",
+			"gpt-5.4-mini",
+			"--base-url",
+			"http://localhost:8317/v1",
+			"--json",
+		], { ...io, openAIClientFactory: () => fakeOpenAIClient("hi"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "chat", answer: "hi" });
+	});
+
+	it("runs chat with defaults from a config file", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const configPath = path.join(root, "config.json");
+		await writeFile(configPath, JSON.stringify({ agentPath, provider: "local", model: "gpt-5.4-mini", baseURL: "http://localhost:8317/v1", apiKey: "key" }));
+		const io = createIO();
+		const code = await main(["chat", "hello", "--config", configPath, "--json"], { ...io, openAIClientFactory: () => fakeOpenAIClient("hi"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "chat", answer: "hi" });
+	});
+
+	it("runs chat as human output", async () => {
+		const io = createIO();
+		const code = await main([
+			"chat", "hello", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
+		], { ...io, openAIClientFactory: () => fakeOpenAIClient("hi"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(io.stdoutText()).toBe("hi\n");
+	});
+
+	it("runs chat as an interactive REPL", async () => {
+		const io = createIO();
+		let calls = 0;
+		const code = await main([
+			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
+		], { ...io, inputLines: lines(["hello", "/exit"]), openAIClientFactory: () => ({ responses: { async create() { calls += 1; return { output_text: "hi" }; } } }), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(calls).toBe(1);
+		expect(io.stdoutText()).toBe("> hi\n> ");
+	});
+
+	it("skips empty REPL input", async () => {
+		const io = createIO();
+		let calls = 0;
+		const code = await main([
+			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
+		], { ...io, inputLines: lines(["", "   ", "/quit"]), openAIClientFactory: () => ({ responses: { async create() { calls += 1; return { output_text: "hi" }; } } }), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(calls).toBe(0);
+		expect(io.stdoutText()).toBe("> > > ");
+	});
+
+	it("reuses REPL messages across turns", async () => {
+		const io = createIO();
+		let calls = 0;
+		let seenInput: unknown;
+		const code = await main([
+			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
+		], { ...io, inputLines: lines(["remember", "recall", "/exit"]), openAIClientFactory: () => ({ responses: { async create(input) { calls += 1; if (calls === 2) seenInput = input; return { output_text: calls === 1 ? "stored" : "recalled" }; } } }), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(calls).toBe(2);
+		expect(seenInput).toMatchObject({ input: expect.arrayContaining([
+			expect.objectContaining({ role: "user", content: "remember" }),
+			expect.objectContaining({ role: "assistant", content: "stored" }),
+			expect.objectContaining({ role: "user", content: "recall" }),
+		]) });
+	});
+
+	it("resets REPL run counters for each user turn", async () => {
+		const io = createIO();
+		let calls = 0;
+		const code = await main([
+			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
+		], { ...io, inputLines: lines(["one", "two", "/exit"]), openAIClientFactory: () => ({ responses: { async create() { calls += 1; return { output_text: `answer-${calls}` }; } } }), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(calls).toBe(2);
+		expect(io.stdoutText()).toBe("> answer-1\n> answer-2\n> ");
+	});
+
+	it("saves REPL sessions for resume", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const io1 = createIO();
+		await main([
+			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--session", "demo", "--session-dir", root,
+		], { ...io1, inputLines: lines(["remember", "/exit"]), openAIClientFactory: () => fakeOpenAIClient("stored"), now: () => 1, createId: nextId() });
+
+		let seenInput: unknown;
+		const io2 = createIO();
+		const code = await main([
+			"chat", "recall", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--resume", "demo", "--session-dir", root, "--json",
+		], { ...io2, openAIClientFactory: () => ({ responses: { async create(input) { seenInput = input; return { output_text: "recalled" }; } } }), now: () => 2, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io2.stdoutText())).toMatchObject({ ok: true, answer: "recalled", sessionId: "demo" });
+		expect(seenInput).toMatchObject({ input: expect.arrayContaining([
+			expect.objectContaining({ role: "user", content: "remember" }),
+			expect.objectContaining({ role: "assistant", content: "stored" }),
+			expect.objectContaining({ role: "user", content: "recall" }),
+		]) });
+	});
+
+	it("saves and resumes chat sessions", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const io1 = createIO();
+		await main([
+			"chat", "remember", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--session", "demo", "--session-dir", root, "--json",
+		], { ...io1, openAIClientFactory: () => fakeOpenAIClient("stored"), now: () => 1, createId: nextId() });
+
+		let seenInput: unknown;
+		const io2 = createIO();
+		const code = await main([
+			"chat", "recall", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--resume", "demo", "--session-dir", root, "--json",
+		], { ...io2, openAIClientFactory: () => ({ responses: { async create(input) { seenInput = input; return { output_text: "recalled" }; } } }), now: () => 2, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io2.stdoutText())).toMatchObject({ ok: true, answer: "recalled", sessionId: "demo" });
+		expect(seenInput).toMatchObject({ input: expect.arrayContaining([
+			expect.objectContaining({ role: "user", content: "remember" }),
+			expect.objectContaining({ role: "assistant", content: "stored" }),
+			expect.objectContaining({ role: "user", content: "recall" }),
+		]) });
 	});
 
 	it("runs a task as JSON with a fake OpenAI client", async () => {
@@ -80,6 +219,27 @@ describe("CLI main", () => {
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "benchmark", summary: { totalTasks: 1, passedTasks: 1, passRate: 1 } });
 	});
 
+	it("returns failure for benchmark tasks that do not pass grading", async () => {
+		const io = createIO();
+		const code = await main([
+			"benchmark",
+			"--suite",
+			suitePath,
+			"--agent",
+			agentPath,
+			"--provider",
+			"local",
+			"--model",
+			"gpt-5.4-mini",
+			"--base-url",
+			"http://localhost:8317/v1",
+			"--json",
+		], { ...io, openAIClientFactory: () => fakeOpenAIClient("wrong"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(1);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: false, command: "benchmark", summary: { failedTasks: 1 }, runs: [{ status: "failed" }] });
+	});
+
 	it("writes benchmark JSON reports", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
 		const reportPath = path.join(root, "report.json");
@@ -89,6 +249,21 @@ describe("CLI main", () => {
 		], { ...io, openAIClientFactory: () => fakeOpenAIClient("pong"), now: () => 1, createId: nextId() });
 
 		expect(code).toBe(0);
+		expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({ version: 1, suite: { id: "smoke" }, summary: { passedTasks: 1 } });
+	});
+
+	it("writes benchmark trace and report files together", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const tracePath = path.join(root, "trace.json");
+		const reportPath = path.join(root, "report.json");
+		const io = createIO();
+		const code = await main([
+			"benchmark", "--suite", suitePath, "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--trace", tracePath, "--report", reportPath, "--json",
+		], { ...io, openAIClientFactory: () => fakeOpenAIClient("pong"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "benchmark" });
+		expect(JSON.parse(await readFile(tracePath, "utf8"))).toMatchObject({ suite: { id: "smoke" }, runs: [{ status: "passed", trace: expect.any(Array) }] });
 		expect(JSON.parse(await readFile(reportPath, "utf8"))).toMatchObject({ version: 1, suite: { id: "smoke" }, summary: { passedTasks: 1 } });
 	});
 
@@ -104,6 +279,68 @@ describe("CLI main", () => {
 		const markdown = await readFile(reportPath, "utf8");
 		expect(markdown).toContain("# Benchmark Report");
 		expect(markdown).toContain("| smoke\\-task | general | passed | 1/1 |");
+	});
+
+	it("runs evolution as JSON and writes reports and history", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const baselineAgentFile = path.join(root, "baseline.json");
+		const candidateAgentFile = path.join(root, "candidate.json");
+		const reportPath = path.join(root, "evolution.md");
+		const historyPath = path.join(root, "evolution.jsonl");
+		await writeFile(baselineAgentFile, JSON.stringify({
+			id: "baseline-agent",
+			version: "1.0.0",
+			name: "Baseline Agent",
+			kind: "baseline",
+			model: { provider: "local", model: "gpt-5.4-mini" },
+			prompts: { system: "system" },
+			tools: { allowedTools: [] },
+			runtime: { maxTurns: 1 },
+		}));
+		await writeFile(candidateAgentFile, JSON.stringify({
+			id: "candidate-agent",
+			version: "1.0.0",
+			name: "Candidate Agent",
+			kind: "candidate",
+			model: { provider: "local", model: "gpt-5.4-mini" },
+			prompts: { system: "system" },
+			tools: { allowedTools: [] },
+			runtime: { maxTurns: 1 },
+		}));
+		let calls = 0;
+		const io = createIO();
+		const code = await main([
+			"evolve", "--suite", suitePath, "--baseline-agent", baselineAgentFile, "--candidate-agent", candidateAgentFile, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--report", reportPath, "--report-format", "markdown", "--history", historyPath, "--json",
+		], { ...io, openAIClientFactory: () => fakeOpenAIClient(++calls === 1 ? "nope" : "pong"), now: () => 1, createId: nextId() });
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "evolve", recommendation: "accept", improvements: ["smoke-task"] });
+		expect(await readFile(reportPath, "utf8")).toContain("# Evolution Report");
+		expect(await readFile(historyPath, "utf8")).toContain("evolution_comparison");
+	});
+
+	it("replays a trace as JSON", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const tracePath = path.join(root, "trace.json");
+		await writeFile(tracePath, JSON.stringify(taskRunFixture("run-1", "task-1", "passed", 1)));
+		const io = createIO();
+		const code = await main(["replay", "--trace", tracePath, "--json"], io);
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "replay", runs: [{ runId: "run-1", eventCount: 2, warnings: [] }] });
+	});
+
+	it("diffs two task runs as JSON", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const leftPath = path.join(root, "left.json");
+		const rightPath = path.join(root, "right.json");
+		await writeFile(leftPath, JSON.stringify(taskRunFixture("left", "task-1", "failed", 0)));
+		await writeFile(rightPath, JSON.stringify(taskRunFixture("right", "task-1", "passed", 1)));
+		const io = createIO();
+		const code = await main(["diff", "--left", leftPath, "--right", rightPath, "--json"], io);
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "diff", diff: { classification: "improvement", scoreDelta: 1 } });
 	});
 
 	it("runs a task through the default read-only tool registry", async () => {
@@ -175,33 +412,31 @@ describe("CLI main", () => {
 	});
 });
 
-function createIO(): { stdout: { write: (chunk: string) => boolean }; stderr: { write: (chunk: string) => boolean }; stdoutText: () => string; stderrText: () => string } {
-	let stdout = "";
-	let stderr = "";
-	return {
-		stdout: { write: (chunk: string) => { stdout += chunk; return true; } },
-		stderr: { write: (chunk: string) => { stderr += chunk; return true; } },
-		stdoutText: () => stdout,
-		stderrText: () => stderr,
+function taskRunFixture(runId: string, taskId: string, status: "passed" | "failed" | "errored" | "timeout", scoreValue: number) {
+	const agent = {
+		id: "agent-1",
+		version: "1.0.0",
+		name: "Agent",
+		kind: "baseline",
+		model: { provider: "local", model: "model" },
+		prompts: { system: "system" },
+		tools: { allowedTools: [] },
+		runtime: { maxTurns: 1 },
 	};
-}
-
-function fakeOpenAIClient(answer: string): OpenAIResponsesClient {
-	return { responses: { async create() { return { output_text: answer }; } } };
-}
-
-function fakeToolOpenAIClient(toolName: string): OpenAIResponsesClient {
-	let calls = 0;
+	const task = { id: taskId, type: "general", title: taskId, prompt: "Prompt", scoring: { method: "rubric" } };
 	return {
-		responses: {
-			async create() {
-				calls += 1;
-				if (calls === 1) {
-					return { output_text: "", output: [{ type: "function_call", call_id: "call_1", name: toolName, arguments: "{\"path\":\"note.txt\"}" }] };
-				}
-				return { output_text: "saw tool" };
-			},
-		},
+		runId,
+		agent,
+		task,
+		status,
+		score: { score: scoreValue, maxScore: 1, passed: status === "passed", reason: "ok" },
+		startedAt: 1,
+		endedAt: 2,
+		durationMs: 1,
+		trace: [
+			{ id: `${runId}-start`, type: "run_start", timestamp: 1, agentId: agent.id, taskId, payload: {} },
+			{ id: `${runId}-end`, type: "run_end", timestamp: 2, agentId: agent.id, taskId, payload: {} },
+		],
 	};
 }
 
@@ -236,7 +471,3 @@ async function writeToolFixture(agentFile: string, taskFile: string, allowedTool
 	}));
 }
 
-function nextId(): () => string {
-	let id = 0;
-	return () => `id-${++id}`;
-}

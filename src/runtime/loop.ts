@@ -156,5 +156,9 @@ function event(
 		agentId: session.agent.id,
 		taskId: session.task.id,
 		payload,
+		sessionId: session.id,
+		...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
+		...(session.parentToolCallId ? { parentToolCallId: session.parentToolCallId } : {}),
+		...(session.subagentId ? { subagentId: session.subagentId } : {}),
 	};
 }

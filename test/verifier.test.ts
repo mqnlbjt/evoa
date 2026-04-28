@@ -20,7 +20,21 @@ describe("verifyEvolutionComparison", () => {
 		const report = verifyEvolutionComparison(suite(run("passed")), suite(run("failed")));
 
 		expect(report.verdict).toBe("fail");
-		expect(report.issues[0]?.type).toBe("regression");
+		expect(report.blocking).toBe(true);
+		expect(report.issues[0]).toMatchObject({ type: "regression", severity: "blocking" });
+	});
+
+	it("passes when no issues are found", () => {
+		const report = verifyEvolutionComparison(suite(run("passed")), suite(run("passed")));
+
+		expect(report).toMatchObject({ verdict: "pass", blocking: false, issues: [] });
+	});
+
+	it("blocks on timeout", () => {
+		const report = verifyEvolutionComparison(suite(run("failed")), suite(run("timeout")));
+
+		expect(report).toMatchObject({ verdict: "fail", blocking: true });
+		expect(report.issues[0]).toMatchObject({ type: "timeout", severity: "blocking" });
 	});
 
 	it("reports denied tool policy events", () => {
@@ -41,8 +55,9 @@ describe("verifyEvolutionComparison", () => {
 			}),
 		);
 
-		expect(report.verdict).toBe("partial");
-		expect(report.issues[0]?.type).toBe("tool-policy");
+		expect(report.verdict).toBe("fail");
+		expect(report.blocking).toBe(true);
+		expect(report.issues[0]).toMatchObject({ type: "tool-policy", severity: "blocking" });
 	});
 });
 

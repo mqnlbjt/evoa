@@ -15,28 +15,45 @@ node dist/cli.js models discover \
   --api-key 12345678
 ```
 
+Create `.evolving-agent/config.json` to avoid repeating defaults:
+
+```json
+{
+  "agentPath": "examples/agents/basic.json",
+  "provider": "local",
+  "model": "gpt-5.4-mini",
+  "baseURL": "http://localhost:8317/v1",
+  "apiKey": "12345678"
+}
+```
+
+Start a chat:
+
+```bash
+node dist/cli.js chat "hello"
+```
+
+Save and resume a chat session:
+
+```bash
+node dist/cli.js chat "remember this" --session demo
+node dist/cli.js chat "continue" --resume demo
+```
+
+Session files store the agent/provider/model/base URL/tool profile startup context, but do not store API keys.
+
 Run one task:
 
 ```bash
 node dist/cli.js run \
-  --agent examples/agents/basic.json \
-  --task examples/tasks/smoke.json \
-  --provider local \
-  --model gpt-5.4-mini \
-  --base-url http://localhost:8317/v1 \
-  --api-key 12345678
+  --task examples/tasks/smoke.json
 ```
 
 Run a benchmark suite:
 
 ```bash
 node dist/cli.js benchmark \
-  --suite examples/suites/smoke.json \
-  --agent examples/agents/basic.json \
-  --provider local \
-  --model gpt-5.4-mini \
-  --base-url http://localhost:8317/v1 \
-  --api-key 12345678
+  --suite examples/suites/smoke.json
 ```
 
 Generate deterministic evolution candidates from a baseline agent:

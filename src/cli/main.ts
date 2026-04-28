@@ -1,17 +1,20 @@
-import { handleBenchmark, handleModelsDiscover, handleRun, writeOptionalFiles, type CliDeps, type CliResult } from "./commands.js";
+import { handleBenchmark, handleChat, handleDiff, handleEvolve, handleModelsDiscover, handleReplay, handleRun, writeOptionalFiles, type CliDeps, type CliResult } from "./commands.js";
 import { formatJson } from "./format.js";
-import { helpText, parseCliArgs, type CliCommand } from "./args.js";
+import { configPathFromArgs, helpText, parseCliArgs, type CliCommand } from "./args.js";
+import { loadCliDefaults } from "./config.js";
 
 export type { CliDeps } from "./commands.js";
 
 export async function main(args: string[], deps: CliDeps = {}): Promise<number> {
 	const stdout = deps.stdout ?? process.stdout;
 	const stderr = deps.stderr ?? process.stderr;
-	const parsed = parseCliArgs(args);
+	const config = await loadCliDefaults(configPathFromArgs(args));
+	const parsed = parseCliArgs(args, config.defaults);
 	const format = parsed.command?.format ?? (args.includes("--json") || args.includes("--format") && args.includes("json") ? "json" : "human");
+	const diagnostics = [...config.diagnostics, ...parsed.diagnostics];
 
-	if (parsed.diagnostics.length > 0 || !parsed.command) {
-		return writeUsageError(parsed.diagnostics, format, stdout, stderr);
+	if (diagnostics.length > 0 || !parsed.command) {
+		return writeUsageError(diagnostics, format, stdout, stderr);
 	}
 	if (parsed.command.kind === "help") {
 		stdout.write(helpText());
@@ -36,8 +39,12 @@ export async function main(args: string[], deps: CliDeps = {}): Promise<number> 
 
 async function runCommand(command: CliCommand, deps: CliDeps): Promise<CliResult> {
 	if (command.kind === "models.discover") return handleModelsDiscover(command, deps);
+	if (command.kind === "chat") return handleChat(command, deps);
 	if (command.kind === "run") return handleRun(command, deps);
 	if (command.kind === "benchmark") return handleBenchmark(command, deps);
+	if (command.kind === "evolve") return handleEvolve(command, deps);
+	if (command.kind === "replay") return handleReplay(command, deps);
+	if (command.kind === "diff") return handleDiff(command, deps);
 	return { exitCode: 0, human: helpText(), json: { ok: true, command: "help" } };
 }
 

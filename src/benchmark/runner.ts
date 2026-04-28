@@ -1,6 +1,7 @@
 import type { AgentSpec, TaskSpec } from "../specs.js";
 import type { RunStore } from "../sessions/run-store.js";
 import type { RunEndPayload, RunStartPayload, ScorePayload, TraceEvent } from "../runtime/events.js";
+import { isRuntimeTimeoutError } from "../runtime/timeout.js";
 import type {
 	AgentRuntimeExecutor,
 	AgentTaskRunResult,
@@ -69,7 +70,7 @@ export class BenchmarkRunner {
 			status = score.passed ? "passed" : "failed";
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
-			status = errorMessage.toLowerCase().includes("timeout") ? "timeout" : "errored";
+			status = isRuntimeTimeoutError(error) ? "timeout" : errorMessage.toLowerCase().includes("timeout") ? "timeout" : "errored";
 			score = {
 				score: 0,
 				maxScore: task.scoring.maxScore ?? 1,

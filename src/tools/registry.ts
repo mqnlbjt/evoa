@@ -1,5 +1,5 @@
 import type { AgentSession } from "../runtime/session.js";
-import type { EvolvingAgentTool } from "./types.js";
+import type { EvolvingAgentTool, ToolExecutionContext } from "./types.js";
 import { decideToolUse, toolCallLimitDecision, type ToolDecision } from "./policy.js";
 
 export interface ToolCall {
@@ -100,7 +100,7 @@ export class ToolRegistry {
 		}
 
 		try {
-			const output = await executeWithTimeout(tool, currentCall.input, signal);
+			const output = await executeWithTimeout(tool, currentCall.input, signal, { session, call: currentCall });
 			return this.finalize(session, hooks, withTiming(withToolLimits(tool, { call: currentCall, decision, status: "success", output }), startedAt));
 		} catch (error) {
 			const timedOut = error instanceof ToolTimeoutError;
@@ -142,8 +142,8 @@ function withToolLimits(tool: EvolvingAgentTool, result: Omit<ToolResult, "start
 	return tool.maxResultBytes === undefined ? result : { ...result, maxResultBytes: tool.maxResultBytes };
 }
 
-async function executeWithTimeout(tool: EvolvingAgentTool, input: unknown, signal?: AbortSignal): Promise<unknown> {
-	if (!tool.timeoutMs) return tool.execute(input, signal);
+async function executeWithTimeout(tool: EvolvingAgentTool, input: unknown, signal?: AbortSignal, context?: ToolExecutionContext): Promise<unknown> {
+	if (!tool.timeoutMs) return tool.execute(input, signal, context);
 
 	const controller = new AbortController();
 	const abort = () => controller.abort(signal?.reason);
@@ -153,7 +153,7 @@ async function executeWithTimeout(tool: EvolvingAgentTool, input: unknown, signa
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
 		return await Promise.race([
-			tool.execute(input, controller.signal),
+			tool.execute(input, controller.signal, context),
 			new Promise<never>((_resolve, reject) => {
 				timeout = setTimeout(() => {
 					controller.abort();

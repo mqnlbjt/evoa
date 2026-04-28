@@ -31,7 +31,7 @@ export function loadAgentDefinitions(value: unknown): AgentDefinitionBundle {
 		return { agents: [validateAgentSpec(value)], subagents: [] };
 	}
 
-	return { agents: mergeAgents(agents), subagents };
+	return { agents: mergeAgents(agents), subagents: rejectDuplicateSubagents(subagents) };
 }
 
 function mergeAgents(agents: AgentSpec[]): AgentSpec[] {
@@ -40,6 +40,15 @@ function mergeAgents(agents: AgentSpec[]): AgentSpec[] {
 		merged.set(agent.id, agent);
 	}
 	return Array.from(merged.values());
+}
+
+function rejectDuplicateSubagents(subagents: SubagentSpec[]): SubagentSpec[] {
+	const seen = new Set<string>();
+	for (const subagent of subagents) {
+		if (seen.has(subagent.id)) throw new Error(`duplicate subagent id: ${subagent.id}`);
+		seen.add(subagent.id);
+	}
+	return subagents;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -18,6 +18,10 @@ export interface TraceEvent<TPayload = unknown> {
 	agentId: string;
 	taskId: string;
 	payload: TPayload;
+	sessionId?: string;
+	parentSessionId?: string;
+	parentToolCallId?: string;
+	subagentId?: string;
 }
 
 export interface RunStartPayload {

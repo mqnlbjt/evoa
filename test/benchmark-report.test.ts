@@ -99,4 +99,33 @@ describe("benchmark reports", () => {
 		expect(markdown).toContain("## Errors");
 		expect(markdown).toContain("`fail`: boom");
 	});
+
+	it("includes subagent trace summaries", () => {
+		const withSubagent = structuredClone(result);
+		withSubagent.runs[0]!.trace = [{
+			id: "event-subagent",
+			type: "tool_result",
+			timestamp: 1,
+			agentId: "agent",
+			taskId: "pass",
+			payload: {
+				output: {
+					subagentId: "worker",
+					agentId: "worker-agent",
+					taskId: "sub-task",
+					sessionId: "sub-session",
+					status: "completed",
+					answer: "ok",
+					trace: [{ id: "sub-event", type: "tool_call", timestamp: 2, agentId: "worker-agent", taskId: "sub-task", payload: {} }],
+				},
+			},
+		}];
+
+		const report = createBenchmarkReport(withSubagent);
+		const markdown = formatBenchmarkReportMarkdown(report);
+
+		expect(report.tasks[0]?.subagentTraces?.[0]).toMatchObject({ subagentId: "worker", agentId: "worker-agent", eventCount: 1, toolCallCount: 1 });
+		expect(markdown).toContain("## Subagent Traces");
+		expect(markdown).toContain("| pass | worker | 1 | 1 | 0 |");
+	});
 });

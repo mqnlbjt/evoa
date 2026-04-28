@@ -12,7 +12,7 @@ export interface BenchmarkEvolutionEngineOptions {
 	baseline: AgentSpec;
 	suite: BenchmarkSuite;
 	generator: CandidateGenerator;
-	createRunner: () => BenchmarkRunner;
+	createRunner: (agent: AgentSpec) => BenchmarkRunner;
 }
 
 export class BenchmarkEvolutionEngine implements EvolutionEngine {
@@ -23,8 +23,8 @@ export class BenchmarkEvolutionEngine implements EvolutionEngine {
 	}
 
 	async compare(candidate: EvolutionCandidate): Promise<EvolutionComparison> {
-		const baseline = await this.options.createRunner().runSuite(this.options.baseline, this.options.suite);
-		const candidateResult = await this.options.createRunner().runSuite(candidate.agent, this.options.suite);
+		const baseline = await this.options.createRunner(this.options.baseline).runSuite(this.options.baseline, this.options.suite);
+		const candidateResult = await this.options.createRunner(candidate.agent).runSuite(candidate.agent, this.options.suite);
 		const regressions = findRegressions(baseline, candidateResult);
 		const improvements = findImprovements(baseline, candidateResult);
 		const deltaScore = candidateResult.summary.totalScore - baseline.summary.totalScore;
