@@ -128,7 +128,7 @@ describe("renderTui", () => {
 	it("can scroll to the beginning of a long assistant message", () => {
 		const state = createState();
 		state.applyTraceEvent({ id: "response", type: "model_response", timestamp: 1, agentId: "agent", taskId: "task", payload: { text: "line1\nline2\nline3\nline4\nline5\nline6" } });
-		const output = renderTui(state.snapshot(), new InputEditor(), { width: 80, height: 10, now: 2, logScrollOffset: 3 });
+		const output = renderTui(state.snapshot(), new InputEditor(), { width: 80, height: 10, now: 2, logScrollOffset: 1 });
 		expect(output).toContain("┃ LLM  line1");
 		expect(output).toContain("┃      line2");
 		expect(output).not.toContain("┃      line6");
@@ -141,7 +141,7 @@ describe("renderTui", () => {
 		expect(bottom).toContain("┃ LLM  abcdefghijk");
 		expect(bottom).toContain("┃      lmnopqrstuv");
 		expect(bottom).toContain("┃      wxyz");
-		const top = renderTui(state.snapshot(), new InputEditor(), { width: 18, height: 8, now: 2, logScrollOffset: 3 });
+		const top = renderTui(state.snapshot(), new InputEditor(), { width: 18, height: 8, now: 2, logScrollOffset: 1 });
 		expect(top).toContain("┃ LLM  abcdefghijk");
 		expect(top).toContain("┃      wxyz");
 	});
@@ -152,7 +152,7 @@ describe("renderTui", () => {
 		state.applyTraceEvent({ id: "first", type: "model_response", timestamp: 1, agentId: "agent", taskId: "task", payload: { text: "first answer" } });
 		state.addUserMessage("second question");
 		state.applyTraceEvent({ id: "second", type: "model_response", timestamp: 1, agentId: "agent", taskId: "task", payload: { text: "line1\nline2\nline3\nline4\nline5\nline6" } });
-		const output = renderTui(state.snapshot(), new InputEditor(), { width: 80, height: 10, now: 2, logScrollOffset: 3 });
+		const output = renderTui(state.snapshot(), new InputEditor(), { width: 80, height: 10, now: 2, logScrollOffset: 1 });
 		expect(output).toContain("┃ LLM  line1");
 		expect(output).toContain("┃      line3");
 		expect(output).not.toContain("first question");

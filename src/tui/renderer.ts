@@ -30,13 +30,9 @@ function renderBody(snapshot: TuiStateSnapshot, context: RenderContext): string[
 
 function renderLog(snapshot: TuiStateSnapshot, context: RenderContext): string[] {
 	const maxLines = bodyMaxLines(snapshot, context);
-	const pages = renderLogPages(snapshot, context.width);
-	const renderedLines = currentLogPage(pages, context.logScrollOffset ?? 0, maxLines);
-	const maxOffset = Math.max(0, renderedLines.length - maxLines);
-	const offset = clamp(context.logScrollOffset ?? 0, 0, maxOffset);
-	const end = renderedLines.length - offset;
-	const start = Math.max(0, end - maxLines);
-	return renderedLines.slice(start, end);
+	const blocks = renderLogBlocks(renderLogPages(snapshot, context.width), maxLines);
+	const offset = clamp(context.logScrollOffset ?? 0, 0, Math.max(0, blocks.length - 1));
+	return blocks[blocks.length - 1 - offset] ?? [];
 }
 
 function renderScrollable(lines: string[], context: RenderContext, offset: number): string[] {
@@ -60,15 +56,14 @@ function renderLogPages(snapshot: TuiStateSnapshot, width: number): string[][] {
 	return pages.length === 0 ? [[]] : pages;
 }
 
-function currentLogPage(pages: string[][], offset: number, maxLines: number): string[] {
-	let remaining = offset;
-	for (let index = pages.length - 1; index >= 0; index -= 1) {
-		const page = pages[index] ?? [];
-		const pageMaxOffset = Math.max(0, page.length - maxLines);
-		if (remaining <= pageMaxOffset) return page;
-		remaining -= pageMaxOffset + 1;
+function renderLogBlocks(pages: string[][], maxLines: number): string[][] {
+	const blocks: string[][] = [];
+	for (const page of pages) {
+		const pageBlocks: string[][] = [];
+		for (let end = page.length; end > 0; end -= maxLines) pageBlocks.unshift(page.slice(Math.max(0, end - maxLines), end));
+		blocks.push(...(pageBlocks.length === 0 ? [[]] : pageBlocks));
 	}
-	return pages[0] ?? [];
+	return blocks.length === 0 ? [[]] : blocks;
 }
 
 function renderStatsView(snapshot: TuiStateSnapshot): string[] {
