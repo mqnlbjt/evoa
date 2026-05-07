@@ -17,6 +17,7 @@ import { ModelRegistry, type ModelRegistryOptions } from "../models/registry.js"
 import { loadTaskSpecFromFile } from "../tasks/loader.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
 import type { ChatCommand, BenchmarkCommand, DiffCommand, EvolveCommand, McpDiagnosticsCommand, McpStatusCommand, ModelsDiscoverCommand, ReplayCommand, RunCommand } from "./args.js";
+import { createRoutedModelClient, effectiveAgentForCommand } from "./model-routing.js";
 import { formatPercent, formatTable } from "./format.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { diagnoseMcpServers, type McpDiagnosticsReport, type McpServerDiagnostic } from "../mcp/diagnostics.js";
@@ -30,7 +31,7 @@ import { JsonSessionStore } from "../sessions/json-session-store.js";
 import { JsonMemoryStore } from "../memory/json-memory-store.js";
 import { LlmMemoryExtractor } from "../memory/llm-extractor.js";
 import { MemoryManager } from "../memory/manager.js";
-import { createMemoryTools, memoryToolNames } from "../memory/tools.js";
+import { createMemoryTools } from "../memory/tools.js";
 import type { AgentSessionStore, StoredAgentSession, StoredAgentStartupContext } from "../sessions/session-store.js";
 import { diffRunSources } from "../replay/run-diff.js";
 
@@ -97,9 +98,9 @@ export async function handleChat(command: ChatCommand, deps: CliDeps): Promise<C
 
 export async function handleRun(command: RunCommand, deps: CliDeps): Promise<CliResult> {
 	const bundle = await loadAgentBundle(command.agentPath);
-	const agent = effectiveAgent(bundle.agent, command.provider, command.model);
+	const agent = effectiveAgentForCommand(bundle.agent, command);
 	const task = await loadTaskSpecFromFile(command.taskPath);
-	const runner = await createRunner(command, deps, bundle.subagents);
+	const runner = await createRunner(command, deps, bundle.subagents, agent);
 	const result = await runner.runTask(agent, task);
 	const json = runJson(command.kind, result);
 	return {
@@ -112,9 +113,9 @@ export async function handleRun(command: RunCommand, deps: CliDeps): Promise<Cli
 
 export async function handleBenchmark(command: BenchmarkCommand, deps: CliDeps): Promise<CliResult> {
 	const bundle = await loadAgentBundle(command.agentPath);
-	const agent = effectiveAgent(bundle.agent, command.provider, command.model);
+	const agent = effectiveAgentForCommand(bundle.agent, command);
 	const suite = await loadBenchmarkSuiteFromFile(command.suitePath);
-	const runner = await createRunner(command, deps, bundle.subagents);
+	const runner = await createRunner(command, deps, bundle.subagents, agent);
 	const result = await runner.runSuite(agent, suite);
 	const json = benchmarkJson(result);
 	const report = command.reportPath ? createBenchmarkReport(result) : undefined;
@@ -152,8 +153,8 @@ export async function handleDiff(command: DiffCommand, _deps: CliDeps): Promise<
 export async function handleEvolve(command: EvolveCommand, deps: CliDeps): Promise<CliResult> {
 	const baselineBundle = await loadAgentBundle(command.baselineAgentPath);
 	const candidateBundle = await loadAgentBundle(command.candidateAgentPath);
-	const baselineAgent = effectiveAgent(baselineBundle.agent, command.provider, command.model);
-	const candidateAgent = effectiveAgent(candidateBundle.agent, command.provider, command.model);
+	const baselineAgent = effectiveAgentForCommand(baselineBundle.agent, command);
+	const candidateAgent = effectiveAgentForCommand(candidateBundle.agent, command);
 	const suite = await loadBenchmarkSuiteFromFile(command.suitePath);
 	const candidate: EvolutionCandidate = {
 		id: candidateAgent.id,
@@ -166,7 +167,7 @@ export async function handleEvolve(command: EvolveCommand, deps: CliDeps): Promi
 		baseline: baselineAgent,
 		suite,
 		generator: { async generate() { return [candidate]; } },
-		createRunner: (agent) => createRunner(command, deps, agent.id === candidateAgent.id ? candidateBundle.subagents : baselineBundle.subagents),
+		createRunner: (agent) => createRunner(command, deps, agent.id === candidateAgent.id ? candidateBundle.subagents : baselineBundle.subagents, agent),
 	});
 	const comparison = await engine.compare(candidate);
 	const verification = verifyEvolutionComparison(comparison.baseline, comparison.candidate);
@@ -239,9 +240,9 @@ async function createChatContext(command: ChatCommand, deps: CliDeps): Promise<C
 	if (command.resumeSessionId && !stored) throw new Error(`session ${command.resumeSessionId} not found`);
 	const resolvedCommand = resolveChatCommand(command, stored);
 	const bundle = await loadAgentBundle(resolvedCommand.agentPath);
-	const agent = effectiveAgent(bundle.agent, resolvedCommand.provider, resolvedCommand.model);
+	const agent = effectiveAgentForCommand(bundle.agent, resolvedCommand);
 	const sessionId = resolvedCommand.resumeSessionId ?? resolvedCommand.sessionId ?? (deps.createId?.() ?? crypto.randomUUID());
-	const modelClient = createModelClient(resolvedCommand, deps);
+	const modelClient = createRoutedModelClient(resolvedCommand, deps, agent);
 	const memoryManager = createMemoryManager(agent, resolvedCommand, modelClient);
 	const runtime = await createRuntime(resolvedCommand, deps, bundle.subagents, memoryManager, modelClient);
 	return {
@@ -283,8 +284,12 @@ function chatMessages(stored: StoredAgentSession | undefined, agent: AgentSpec):
 function resolveChatCommand(command: ChatCommand, stored: StoredAgentSession | undefined): ResolvedChatCommand {
 	const sessionDir = resolveOptionalChatString(command, stored, "sessionDir");
 	const agentPath = resolveRequiredChatString(command, stored, "agentPath", "--agent");
+	const modelOverride = hasModelOverride(command);
+	const providers = resolvedProviders(command, stored, modelOverride);
+	const modelRouting = resolvedModelRouting(command, stored, modelOverride);
 	return {
-		...command,
+		kind: command.kind,
+		format: command.format,
 		agentPath,
 		provider: resolveRequiredChatString(command, stored, "provider", "--provider"),
 		model: resolveRequiredChatString(command, stored, "model", "--model"),
@@ -292,9 +297,29 @@ function resolveChatCommand(command: ChatCommand, stored: StoredAgentSession | u
 		providerFormat: resolveProviderFormat(command, stored),
 		toolProfile: resolveToolProfile(command, stored),
 		providedFlags: { ...command.providedFlags, agentPath: command.providedFlags.agentPath || stored?.startupContext?.agentPath !== undefined || agentPath !== command.agentPath },
+		...(command.prompt ? { prompt: command.prompt } : {}),
+		...(command.outputPath ? { outputPath: command.outputPath } : {}),
+		...(command.tracePath ? { tracePath: command.tracePath } : {}),
+		...(command.apiKey ? { apiKey: command.apiKey } : {}),
+		...(command.sessionId ? { sessionId: command.sessionId } : {}),
+		...(command.resumeSessionId ? { resumeSessionId: command.resumeSessionId } : {}),
 		...(command.mcpServers ? { mcpServers: command.mcpServers } : {}),
+		...(providers ? { providers } : {}),
+		...(modelRouting ? { modelRouting } : {}),
 		...(sessionDir ? { sessionDir } : {}),
 	};
+}
+
+function resolvedProviders(command: ChatCommand, stored: StoredAgentSession | undefined, modelOverride: boolean): ChatCommand["providers"] {
+	return modelOverride ? command.providers : (stored?.startupContext?.providers ?? command.providers);
+}
+
+function resolvedModelRouting(command: ChatCommand, stored: StoredAgentSession | undefined, modelOverride: boolean): ChatCommand["modelRouting"] {
+	return modelOverride ? command.modelRouting : (stored?.startupContext?.modelRouting ?? command.modelRouting);
+}
+
+function hasModelOverride(command: ChatCommand): boolean {
+	return command.providedFlags.provider === true || command.providedFlags.model === true || command.providedFlags.baseURL === true || command.providedFlags.providerFormat === true;
 }
 
 function resolveRequiredChatString(command: ChatCommand, stored: StoredAgentSession | undefined, key: "agentPath" | "provider" | "model" | "baseURL", flag: string): string {
@@ -330,9 +355,9 @@ function createChatInput(deps: CliDeps): { inputLines: AsyncIterable<string>; cl
 	return { inputLines: input, close: () => input.close() };
 }
 
-async function createRunner(command: RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = []): Promise<BenchmarkRunner> {
+async function createRunner(command: RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = [], agent?: AgentSpec): Promise<BenchmarkRunner> {
 	return new BenchmarkRunner({
-		runtime: await createRuntime(command, deps, subagents),
+		runtime: await createRuntime(command, deps, subagents, undefined, agent ? createRoutedModelClient(command, deps, agent) : undefined),
 		grader: new MinimalTaskGrader(),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
@@ -428,13 +453,21 @@ function isDefaultSessionDir(sessionDir: string): boolean {
 }
 
 function createModelClient(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): ModelClient {
-	const registry = createModelRegistry(command, deps);
-	registry.registerModel(command.provider, {
-		id: command.model,
-		providerId: command.provider,
-		format: command.providerFormat,
-	});
-	return registry.createClient(command.provider, command.model);
+	return createRoutedModelClient(command, deps, commandAgent(command));
+}
+
+function commandAgent(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): AgentSpec {
+	return {
+		id: "model-routing-command",
+		version: "0.0.0",
+		name: "Model Routing Command",
+		kind: "baseline",
+		model: { provider: command.provider, model: command.model },
+		...(command.modelRouting ? { modelRouting: command.modelRouting } : {}),
+		prompts: { system: "" },
+		tools: { allowedTools: [] },
+		runtime: { maxTurns: 1 },
+	};
 }
 
 function createModelRegistry(command: ModelsDiscoverCommand | ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): ModelRegistry {
@@ -487,25 +520,10 @@ function storedStartupContext(command: ResolvedChatCommand): StoredAgentStartupC
 		baseURL: command.baseURL,
 		providerFormat: command.providerFormat,
 		toolProfile: command.toolProfile,
+		...(command.providers ? { providers: command.providers } : {}),
+		...(command.modelRouting ? { modelRouting: command.modelRouting } : {}),
 		...(command.sessionDir ? { sessionDir: command.sessionDir } : {}),
 	};
-}
-
-function effectiveAgent(agent: AgentSpec, provider: string, model: string): AgentSpec {
-	return {
-		...agent,
-		model: {
-			...agent.model,
-			provider,
-			model,
-		},
-		tools: effectiveTools(agent),
-	};
-}
-
-function effectiveTools(agent: AgentSpec): AgentSpec["tools"] {
-	if (agent.runtime.memoryPolicy !== "long-term") return agent.tools;
-	return { ...agent.tools, allowedTools: [...new Set([...agent.tools.allowedTools, ...memoryToolNames])] };
 }
 
 function runJson(command: "run", result: AgentTaskRunResult): unknown {

@@ -1,5 +1,6 @@
 import type { ModelMessage } from "../models/types.js";
-import type { ProviderFormat } from "../models/provider-types.js";
+import type { ProviderConfig, ProviderFormat } from "../models/provider-types.js";
+import type { ModelRoutingSpec } from "../specs.js";
 import type { ToolProfile } from "../tools/profiles.js";
 
 export interface StoredAgentStartupContext {
@@ -8,6 +9,8 @@ export interface StoredAgentStartupContext {
 	model: string;
 	baseURL: string;
 	providerFormat: ProviderFormat;
+	providers?: Record<string, ProviderConfig>;
+	modelRouting?: ModelRoutingSpec;
 	toolProfile: ToolProfile;
 	sessionDir?: string;
 }

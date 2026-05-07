@@ -1,5 +1,6 @@
 import path from "node:path";
-import type { ProviderFormat } from "../models/provider-types.js";
+import type { ProviderConfig, ProviderFormat } from "../models/provider-types.js";
+import type { ModelRoutingSpec } from "../specs.js";
 import type { BenchmarkReportFormat } from "../benchmark/report.js";
 import type { EvolutionReportFormat } from "../evolution/report.js";
 import type { McpServersConfig } from "../mcp/types.js";
@@ -14,6 +15,8 @@ export interface CliDefaults {
 	baseURL?: string;
 	apiKey?: string;
 	providerFormat?: ProviderFormat;
+	providers?: Record<string, ProviderConfig>;
+	modelRouting?: ModelRoutingSpec;
 	toolProfile?: ToolProfile;
 	sessionDir?: string;
 	mcpServers?: McpServersConfig;
@@ -45,6 +48,11 @@ export interface ModelsDiscoverCommand extends BaseCommand {
 	providerFormat: ProviderFormat;
 }
 
+export interface ModelRoutingCommandFields {
+	providers?: Record<string, ProviderConfig>;
+	modelRouting?: ModelRoutingSpec;
+}
+
 export interface McpCommandFields {
 	mcpServers?: McpServersConfig;
 }
@@ -57,7 +65,7 @@ export interface McpDiagnosticsCommand extends BaseCommand, McpCommandFields {
 	kind: "mcp.diagnostics";
 }
 
-export interface ChatCommand extends BaseCommand, McpCommandFields {
+export interface ChatCommand extends BaseCommand, McpCommandFields, ModelRoutingCommandFields {
 	kind: "chat";
 	prompt?: string;
 	agentPath?: string;
@@ -77,7 +85,7 @@ export interface TuiCommand extends Omit<ChatCommand, "kind" | "prompt"> {
 	kind: "tui";
 }
 
-export interface RunCommand extends BaseCommand, McpCommandFields {
+export interface RunCommand extends BaseCommand, McpCommandFields, ModelRoutingCommandFields {
 	kind: "run";
 	agentPath: string;
 	taskPath: string;
@@ -89,7 +97,7 @@ export interface RunCommand extends BaseCommand, McpCommandFields {
 	toolProfile: ToolProfile;
 }
 
-export interface BenchmarkCommand extends BaseCommand, McpCommandFields {
+export interface BenchmarkCommand extends BaseCommand, McpCommandFields, ModelRoutingCommandFields {
 	kind: "benchmark";
 	agentPath: string;
 	suitePath: string;
@@ -103,7 +111,7 @@ export interface BenchmarkCommand extends BaseCommand, McpCommandFields {
 	reportPath?: string;
 }
 
-export interface EvolveCommand extends BaseCommand, McpCommandFields {
+export interface EvolveCommand extends BaseCommand, McpCommandFields, ModelRoutingCommandFields {
 	kind: "evolve";
 	baselineAgentPath: string;
 	candidateAgentPath: string;
@@ -398,6 +406,8 @@ function buildChat(flags: FlagValues, prompt: string | undefined, common: BaseCo
 		...(sessionDir ? { sessionDir } : {}),
 		providedFlags: chatProvidedFlags(flags),
 		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
+		...(defaults.providers ? { providers: defaults.providers } : {}),
+		...(defaults.modelRouting ? { modelRouting: defaults.modelRouting } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
 		...(common.tracePath ? { tracePath: common.tracePath } : {}),
 	};
@@ -431,6 +441,8 @@ function buildRun(flags: FlagValues, common: BaseCommand & { providerFormat: Pro
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
 		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
+		...(defaults.providers ? { providers: defaults.providers } : {}),
+		...(defaults.modelRouting ? { modelRouting: defaults.modelRouting } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
 		...(common.tracePath ? { tracePath: common.tracePath } : {}),
 	};
@@ -465,6 +477,8 @@ function buildBenchmark(
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
 		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
+		...(defaults.providers ? { providers: defaults.providers } : {}),
+		...(defaults.modelRouting ? { modelRouting: defaults.modelRouting } : {}),
 		...(reportPath ? { reportPath } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
 		...(common.tracePath ? { tracePath: common.tracePath } : {}),
@@ -503,6 +517,8 @@ function buildEvolve(
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
 		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
+		...(defaults.providers ? { providers: defaults.providers } : {}),
+		...(defaults.modelRouting ? { modelRouting: defaults.modelRouting } : {}),
 		...(reportPath ? { reportPath } : {}),
 		...(historyPath ? { historyPath } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),

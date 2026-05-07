@@ -10,6 +10,20 @@ describe("parseCliDefaults", () => {
 			baseURL: "url",
 			apiKey: "key",
 			providerFormat: "anthropic-messages",
+			providers: {
+				openai: { baseURL: "https://api.openai.com/v1", format: "openai-responses", apiKey: "openai-key" },
+				anthropic: { baseURL: "https://api.anthropic.com/v1", format: "anthropic-messages", headers: { "x-api": "anthropic" } },
+			},
+			models: {
+				aliases: {
+					default: { provider: "openai", model: "gpt-default" },
+					small: { provider: "openai", model: "gpt-small", reasoningLevel: "off" },
+					strong: { provider: "anthropic", model: "claude-strong", reasoningLevel: "high" },
+				},
+				routes: { main: "strong", "memory-extraction": "small" },
+				defaultAlias: "default",
+				purposeRules: { codingTasks: true, toolHeavy: false },
+			},
 			toolProfile: "coding",
 			sessionDir: "sessions",
 			mcpServers: {
@@ -48,6 +62,20 @@ describe("parseCliDefaults", () => {
 			baseURL: "url",
 			apiKey: "key",
 			providerFormat: "anthropic-messages",
+			providers: {
+				openai: { id: "openai", baseURL: "https://api.openai.com/v1", format: "openai-responses", apiKey: "openai-key" },
+				anthropic: { id: "anthropic", baseURL: "https://api.anthropic.com/v1", format: "anthropic-messages", headers: { "x-api": "anthropic" } },
+			},
+			modelRouting: {
+				aliases: {
+					default: { provider: "openai", model: "gpt-default" },
+					small: { provider: "openai", model: "gpt-small", reasoningLevel: "off" },
+					strong: { provider: "anthropic", model: "claude-strong", reasoningLevel: "high" },
+				},
+				routes: { main: "strong", "memory-extraction": "small" },
+				defaultAlias: "default",
+				purposeRules: { codingTasks: true, toolHeavy: false },
+			},
 			toolProfile: "coding",
 			sessionDir: "sessions",
 			mcpServers: {
@@ -86,6 +114,26 @@ describe("parseCliDefaults", () => {
 		expect(result.diagnostics).toEqual([
 			"config.providerFormat must be openai-responses or anthropic-messages",
 			"config.toolProfile must be read-only, coding, benchmark-sandbox, or dangerous",
+		]);
+	});
+
+	it("reports invalid model routing config values", () => {
+		const result = parseCliDefaults({
+			providers: { bad: { baseURL: "url", format: "bad" } },
+			models: {
+				aliases: { small: { provider: "openai", reasoningLevel: "huge" } },
+				routes: { unknown: "small", summary: "missing" },
+				purposeRules: { codingTasks: "yes" },
+			},
+		});
+
+		expect(result.diagnostics).toEqual([
+			"config.providers.bad.format must be openai-responses or anthropic-messages",
+			"config.models.aliases.small.model must be a non-empty string",
+			"config.models.aliases.small.reasoningLevel must be off, minimal, low, medium, high, or xhigh",
+			"config.models.routes.unknown is not a supported model purpose",
+			"config.models.routes.summary references unknown alias missing",
+			"config.models.purposeRules.codingTasks must be a boolean",
 		]);
 	});
 

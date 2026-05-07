@@ -1,5 +1,5 @@
 import type { TaskExecutionOutput } from "../benchmark/types.js";
-import type { ModelClient, ModelMessage, ModelRequest, ModelResponse, ModelToolDefinition } from "../models/types.js";
+import type { ModelClient, ModelMessage, ModelPurpose, ModelRequest, ModelResponse, ModelToolDefinition } from "../models/types.js";
 import { normalizeToolResultContent, type ToolCall, type ToolRegistry, type RuntimeHook, type ToolResult } from "../tools/registry.js";
 import { decideToolUse } from "../tools/policy.js";
 import type { TraceEvent, TraceEventObserver } from "./events.js";
@@ -30,16 +30,18 @@ export async function runAgentLoop(
 		session.turnCount += 1;
 		const tools = modelTools(session, options.toolRegistry);
 		const requestMessages = memoryMessages(options, session.messages);
+		const purpose = modelPurpose(session);
 		const request: ModelRequest = {
 			agent: session.agent,
 			task: session.task,
 			messages: requestMessages,
 			turn: session.turnCount,
+			purpose,
 			...(tools.length > 0 ? { tools } : {}),
 		};
 
 		const modelStartedAt = now();
-		recordEvent(session, options, event(createId, now, "model_request", session, { messages: request.messages, turn: request.turn, startedAt: modelStartedAt, ...(options.memoryContextItemIds ? { memoryContext: options.memoryContextItemIds } : {}) }));
+		recordEvent(session, options, event(createId, now, "model_request", session, { messages: request.messages, turn: request.turn, purpose, startedAt: modelStartedAt, ...(options.memoryContextItemIds ? { memoryContext: options.memoryContextItemIds } : {}) }));
 		lastResponse = await options.modelClient.complete(request, signal);
 		const modelEndedAt = now();
 		recordEvent(session, options, event(createId, now, "model_response", session, { ...lastResponse, timing: lastResponse.timing ?? { startedAt: modelStartedAt, endedAt: modelEndedAt, durationMs: Math.max(0, modelEndedAt - modelStartedAt) } }));
@@ -172,6 +174,10 @@ function modelTools(session: AgentSession, registry?: ToolRegistry): ModelToolDe
 			description: tool.description,
 			...(tool.inputSchema === undefined ? {} : { inputSchema: tool.inputSchema }),
 		}));
+}
+
+function modelPurpose(session: AgentSession): ModelPurpose {
+	return session.agent.modelRouting?.purposeRules?.codingTasks === true && session.task.type === "coding" ? "coding" : "main";
 }
 
 function event(

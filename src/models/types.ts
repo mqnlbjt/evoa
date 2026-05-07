@@ -1,5 +1,15 @@
 import type { AgentSpec, TaskSpec } from "../specs.js";
 
+export type ModelPurpose = "main" | "memory-extraction" | "summary" | "compaction" | "verification" | "evolution" | "coding" | "tool-heavy";
+
+export interface ModelRoutingHints {
+	inputTokenEstimate?: number;
+	toolRiskLevel?: "low" | "medium" | "high";
+	toolCount?: number;
+	preferCache?: boolean;
+	allowUpgrade?: boolean;
+}
+
 export type ModelContentBlock =
 	| { type: "text"; text: string }
 	| { type: "reasoning"; text: string }
@@ -31,6 +41,8 @@ export interface ModelRequest {
 	task: TaskSpec;
 	messages: ModelMessage[];
 	turn: number;
+	purpose?: ModelPurpose;
+	routing?: ModelRoutingHints;
 	tools?: ModelToolDefinition[];
 }
 

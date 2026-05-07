@@ -75,6 +75,23 @@ describe("parseCliArgs", () => {
 		expect(result.command).toMatchObject({ kind: "chat", agentPath: "agent.json", provider: "local", model: "model", baseURL: "url", apiKey: "key", toolProfile: "coding", sessionDir: "sessions" });
 	});
 
+	it("passes model routing defaults to model commands", () => {
+		const defaults = {
+			agentPath: "agent.json",
+			provider: "local",
+			model: "model",
+			baseURL: "url",
+			providers: { local: { id: "local", baseURL: "url", format: "openai-responses" as const } },
+			modelRouting: { aliases: { small: { provider: "local", model: "small" } }, routes: { "memory-extraction": "small" } },
+		};
+
+		const chat = parseCliArgs(["chat", "hello"], defaults);
+		const run = parseCliArgs(["run", "--task", "task.json"], defaults);
+
+		expect(chat.command).toMatchObject({ kind: "chat", providers: defaults.providers, modelRouting: defaults.modelRouting });
+		expect(run.command).toMatchObject({ kind: "run", providers: defaults.providers, modelRouting: defaults.modelRouting });
+	});
+
 	it("lets explicit flags override CLI defaults", () => {
 		const result = parseCliArgs(["run", "--task", "task.json", "--model", "flag-model"], {
 			agentPath: "agent.json",

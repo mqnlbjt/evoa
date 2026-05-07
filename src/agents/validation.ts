@@ -1,4 +1,5 @@
-import type { AgentSpec, SubagentSpec } from "../specs.js";
+import type { AgentSpec, ModelRoutingSpec, ModelSpec, SubagentSpec } from "../specs.js";
+import type { ModelPurpose } from "../models/types.js";
 
 export function validateAgentSpec(value: unknown): AgentSpec {
 	if (!isRecord(value)) throw new Error("agent spec must be an object");
@@ -9,8 +10,8 @@ export function validateAgentSpec(value: unknown): AgentSpec {
 	requireString(agent.name, "name");
 	if (agent.kind !== "baseline" && agent.kind !== "candidate") throw new Error("kind must be baseline or candidate");
 	if (!isRecord(agent.model)) throw new Error("model is required");
-	requireString(agent.model.provider, "model.provider");
-	requireString(agent.model.model, "model.model");
+	validateModelSpec(agent.model, "model");
+	if (agent.modelRouting !== undefined) validateModelRoutingSpec(agent.modelRouting);
 	if (!isRecord(agent.prompts)) throw new Error("prompts is required");
 	requireString(agent.prompts.system, "prompts.system");
 	if (!isRecord(agent.tools)) throw new Error("tools is required");
@@ -52,6 +53,52 @@ export function validateSubagentSpec(value: unknown): SubagentSpec {
 	}
 	validateAgentSpec(subagent.agent);
 	return subagent as SubagentSpec;
+}
+
+function validateModelSpec(value: unknown, path: string): asserts value is ModelSpec {
+	if (!isRecord(value)) throw new Error(`${path} must be an object`);
+	requireString(value.provider, `${path}.provider`);
+	requireString(value.model, `${path}.model`);
+	if (value.reasoningLevel !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(String(value.reasoningLevel))) {
+		throw new Error(`${path}.reasoningLevel must be off, minimal, low, medium, high, or xhigh`);
+	}
+	if (value.options !== undefined && !isRecord(value.options)) throw new Error(`${path}.options must be an object`);
+}
+
+function validateModelRoutingSpec(value: unknown): asserts value is ModelRoutingSpec {
+	if (!isRecord(value)) throw new Error("modelRouting must be an object");
+	validateModelAliases(value.aliases);
+	validateModelRoutes(value.routes);
+	if (value.defaultAlias !== undefined) requireString(value.defaultAlias, "modelRouting.defaultAlias");
+	if (value.purposeRules !== undefined) validatePurposeRules(value.purposeRules);
+}
+
+function validateModelAliases(value: unknown): void {
+	if (value === undefined) return;
+	if (!isRecord(value)) throw new Error("modelRouting.aliases must be an object");
+	for (const [alias, model] of Object.entries(value)) {
+		requireString(alias, "modelRouting.aliases key");
+		validateModelSpec(model, `modelRouting.aliases.${alias}`);
+	}
+}
+
+function validateModelRoutes(value: unknown): void {
+	if (value === undefined) return;
+	if (!isRecord(value)) throw new Error("modelRouting.routes must be an object");
+	for (const [purpose, alias] of Object.entries(value)) {
+		if (!isModelPurpose(purpose)) throw new Error(`modelRouting.routes.${purpose} is not a supported model purpose`);
+		requireString(alias, `modelRouting.routes.${purpose}`);
+	}
+}
+
+function validatePurposeRules(value: unknown): void {
+	if (!isRecord(value)) throw new Error("modelRouting.purposeRules must be an object");
+	if (value.codingTasks !== undefined && typeof value.codingTasks !== "boolean") throw new Error("modelRouting.purposeRules.codingTasks must be a boolean");
+	if (value.toolHeavy !== undefined && typeof value.toolHeavy !== "boolean") throw new Error("modelRouting.purposeRules.toolHeavy must be a boolean");
+}
+
+function isModelPurpose(value: string): value is ModelPurpose {
+	return ["main", "memory-extraction", "summary", "compaction", "verification", "evolution", "coding", "tool-heavy"].includes(value);
 }
 
 function requireString(value: unknown, field: string): asserts value is string {

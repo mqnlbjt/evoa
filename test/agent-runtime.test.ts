@@ -36,6 +36,22 @@ describe("AgentRuntime", () => {
 
 		expect(output.answer).toBe("hi");
 		expect(output.trace?.map((event) => event.type)).toEqual(["model_request", "model_response"]);
+		expect(output.trace?.[0]?.payload).toMatchObject({ purpose: "main" });
+	});
+
+	it("uses coding purpose when enabled for coding tasks", async () => {
+		let seenPurpose: unknown;
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenPurpose = request.purpose;
+				return { text: "hi" };
+			},
+		};
+		const runtime = new AgentRuntime({ modelClient, createId: createIds(), now: () => 1 });
+
+		await runtime.runTask({ ...agent, modelRouting: { purposeRules: { codingTasks: true } } }, { ...task, type: "coding" });
+
+		expect(seenPurpose).toBe("coding");
 	});
 
 	it("executes allowed tool calls and continues to the next turn", async () => {

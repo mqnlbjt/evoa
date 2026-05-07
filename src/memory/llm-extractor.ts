@@ -1,4 +1,4 @@
-import type { ModelClient, ModelMessage } from "../models/types.js";
+import type { ModelClient, ModelMessage, ModelRequest } from "../models/types.js";
 import type { AgentSpec, TaskSpec } from "../specs.js";
 import { hashText, ruleBasedMemoryExtractor } from "./extractor.js";
 import type { MemoryCandidate, MemoryExtractor, MemoryScope, MemorySourceRef, MemoryTurnInput, StoredMemoryLayer } from "./types.js";
@@ -35,7 +35,7 @@ export class LlmMemoryExtractor implements MemoryExtractor {
 	}
 }
 
-function memoryRequest(input: MemoryTurnInput, baseAgent: AgentSpec): { agent: AgentSpec; task: TaskSpec; messages: ModelMessage[]; turn: number } {
+function memoryRequest(input: MemoryTurnInput, baseAgent: AgentSpec): ModelRequest {
 	const prompt = [
 		"Extract durable long-term memories from the new conversation messages.",
 		"Return strict JSON only: {\"memories\":[...]}. Do not include markdown.",
@@ -51,6 +51,7 @@ function memoryRequest(input: MemoryTurnInput, baseAgent: AgentSpec): { agent: A
 		task: extractorTask(prompt),
 		messages: [{ role: "user", content: prompt }],
 		turn: 0,
+		purpose: "memory-extraction",
 	};
 }
 

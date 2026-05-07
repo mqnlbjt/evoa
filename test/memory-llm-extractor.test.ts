@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LlmMemoryExtractor } from "../src/memory/llm-extractor.js";
 import type { MemoryExtractor } from "../src/memory/types.js";
-import type { ModelClient } from "../src/models/types.js";
+import type { ModelClient, ModelRequest } from "../src/models/types.js";
 import type { AgentSpec } from "../src/specs.js";
 
 describe("LlmMemoryExtractor", () => {
@@ -30,6 +30,16 @@ describe("LlmMemoryExtractor", () => {
 				sourceRefs: [expect.objectContaining({ id: "s1:1", messageIndex: 1 })],
 			}),
 		]));
+	});
+
+	it("marks memory extraction requests with a dedicated purpose", async () => {
+		let seenRequest: ModelRequest | undefined;
+		const extractor = new LlmMemoryExtractor({ async complete(request) { seenRequest = request; return { text: "{\"memories\":[]}" }; } }, agent());
+
+		await extractor.extract(input("remember this"));
+
+		expect(seenRequest?.purpose).toBe("memory-extraction");
+		expect(seenRequest?.agent.id).toBe("agent-memory-extractor");
 	});
 
 	it("falls back when semantic JSON is invalid", async () => {

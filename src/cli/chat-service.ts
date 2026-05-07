@@ -1,11 +1,10 @@
 import path, { dirname } from "node:path";
 import { loadAgentDefinitionsFromFile } from "../agents/loader.js";
 import type { ModelRegistryOptions } from "../models/registry.js";
-import { ModelRegistry } from "../models/registry.js";
 import { JsonMemoryStore } from "../memory/json-memory-store.js";
 import { LlmMemoryExtractor } from "../memory/llm-extractor.js";
 import { MemoryManager } from "../memory/manager.js";
-import { createMemoryTools, memoryToolNames } from "../memory/tools.js";
+import { createMemoryTools } from "../memory/tools.js";
 import type { ModelClient, ModelMessage } from "../models/types.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { RunEndPayload, RunStartPayload, TraceEvent, TraceEventObserver } from "../runtime/events.js";
@@ -16,6 +15,7 @@ import { JsonSessionStore } from "../sessions/json-session-store.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { createToolRegistryForProfile } from "../tools/profiles.js";
 import type { BenchmarkCommand, ChatCommand, EvolveCommand, RunCommand, TuiCommand } from "./args.js";
+import { createRoutedModelClient, effectiveAgentForCommand } from "./model-routing.js";
 
 export interface ChatServiceDeps {
 	fetchFn?: typeof fetch;
@@ -61,9 +61,9 @@ export async function createChatServiceContext(command: ChatCommand | TuiCommand
 	if (chatCommand.resumeSessionId && !stored) throw new Error(`session ${chatCommand.resumeSessionId} not found`);
 	const resolvedCommand = resolveChatCommand(chatCommand, stored);
 	const bundle = await loadAgentBundle(resolvedCommand.agentPath);
-	const agent = effectiveAgent(bundle.agent, resolvedCommand.provider, resolvedCommand.model);
+	const agent = effectiveAgentForCommand(bundle.agent, resolvedCommand);
 	const sessionId = resolvedCommand.resumeSessionId ?? resolvedCommand.sessionId ?? (deps.createId?.() ?? crypto.randomUUID());
-	const modelClient = createModelClient(resolvedCommand, deps);
+	const modelClient = createRoutedModelClient(resolvedCommand, deps, agent);
 	const memoryManager = createMemoryManager(agent, resolvedCommand, modelClient);
 	const toolRegistry = createToolRegistry(resolvedCommand, deps);
 	registerMemoryTools(toolRegistry, resolvedCommand, deps, memoryManager);
@@ -154,26 +154,9 @@ export async function loadAgentBundle(agentPath: string): Promise<{ agent: Agent
 	return { agent, subagents: bundle.subagents };
 }
 
-export function effectiveAgent(agent: AgentSpec, provider: string, model: string): AgentSpec {
-	return {
-		...agent,
-		model: {
-			...agent.model,
-			provider,
-			model,
-		},
-		tools: effectiveTools(agent),
-	};
-}
-
 function createMemoryManager(agent: AgentSpec, command: ResolvedChatCommand, modelClient: ModelClient): MemoryManager | undefined {
 	if (agent.runtime.memoryPolicy !== "long-term") return undefined;
 	return new MemoryManager(new JsonMemoryStore(path.join(chatStorageRoot(command), ".evolving-agent", "memory")), new LlmMemoryExtractor(modelClient, agent));
-}
-
-function effectiveTools(agent: AgentSpec): AgentSpec["tools"] {
-	if (agent.runtime.memoryPolicy !== "long-term") return agent.tools;
-	return { ...agent.tools, allowedTools: [...new Set([...agent.tools.allowedTools, ...memoryToolNames])] };
 }
 
 function registerMemoryTools(toolRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): void {
@@ -218,8 +201,12 @@ function chatMessages(stored: StoredAgentSession | undefined, agent: AgentSpec):
 function resolveChatCommand(command: ChatCommand, stored: StoredAgentSession | undefined): ResolvedChatCommand {
 	const sessionDir = resolveOptionalChatString(command, stored, "sessionDir");
 	const agentPath = resolveRequiredChatString(command, stored, "agentPath", "--agent");
+	const modelOverride = hasModelOverride(command);
+	const providers = resolvedProviders(command, stored, modelOverride);
+	const modelRouting = resolvedModelRouting(command, stored, modelOverride);
 	return {
-		...command,
+		kind: command.kind,
+		format: command.format,
 		agentPath,
 		provider: resolveRequiredChatString(command, stored, "provider", "--provider"),
 		model: resolveRequiredChatString(command, stored, "model", "--model"),
@@ -227,8 +214,29 @@ function resolveChatCommand(command: ChatCommand, stored: StoredAgentSession | u
 		providerFormat: resolveProviderFormat(command, stored),
 		toolProfile: resolveToolProfile(command, stored),
 		providedFlags: { ...command.providedFlags, agentPath: command.providedFlags.agentPath || stored?.startupContext?.agentPath !== undefined || agentPath !== command.agentPath },
+		...(command.prompt ? { prompt: command.prompt } : {}),
+		...(command.outputPath ? { outputPath: command.outputPath } : {}),
+		...(command.tracePath ? { tracePath: command.tracePath } : {}),
+		...(command.apiKey ? { apiKey: command.apiKey } : {}),
+		...(command.sessionId ? { sessionId: command.sessionId } : {}),
+		...(command.resumeSessionId ? { resumeSessionId: command.resumeSessionId } : {}),
+		...(command.mcpServers ? { mcpServers: command.mcpServers } : {}),
+		...(providers ? { providers } : {}),
+		...(modelRouting ? { modelRouting } : {}),
 		...(sessionDir ? { sessionDir } : {}),
 	};
+}
+
+function resolvedProviders(command: ChatCommand, stored: StoredAgentSession | undefined, modelOverride: boolean): ChatCommand["providers"] {
+	return modelOverride ? command.providers : (stored?.startupContext?.providers ?? command.providers);
+}
+
+function resolvedModelRouting(command: ChatCommand, stored: StoredAgentSession | undefined, modelOverride: boolean): ChatCommand["modelRouting"] {
+	return modelOverride ? command.modelRouting : (stored?.startupContext?.modelRouting ?? command.modelRouting);
+}
+
+function hasModelOverride(command: ChatCommand): boolean {
+	return command.providedFlags.provider === true || command.providedFlags.model === true || command.providedFlags.baseURL === true || command.providedFlags.providerFormat === true;
 }
 
 function resolveRequiredChatString(command: ChatCommand, stored: StoredAgentSession | undefined, key: "agentPath" | "provider" | "model" | "baseURL", flag: string): string {
@@ -292,32 +300,28 @@ function storedStartupContext(command: ResolvedChatCommand): StoredAgentStartupC
 		baseURL: command.baseURL,
 		providerFormat: command.providerFormat,
 		toolProfile: command.toolProfile,
+		...(command.providers ? { providers: command.providers } : {}),
+		...(command.modelRouting ? { modelRouting: command.modelRouting } : {}),
 		...(command.sessionDir ? { sessionDir: command.sessionDir } : {}),
 	};
 }
 
 function createModelClient(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ModelClient {
-	const registry = createModelRegistry(command, deps);
-	registry.registerModel(command.provider, {
-		id: command.model,
-		providerId: command.provider,
-		format: command.providerFormat,
-	});
-	return registry.createClient(command.provider, command.model);
+	return createRoutedModelClient(command, deps, commandAgent(command));
 }
 
-function createModelRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ModelRegistry {
-	const registry = new ModelRegistry({
-		...(deps.fetchFn ? { fetchFn: deps.fetchFn } : {}),
-		...(deps.openAIClientFactory ? { openAIClientFactory: deps.openAIClientFactory } : {}),
-	});
-	registry.registerProvider({
-		id: command.provider,
-		baseURL: command.baseURL,
-		format: command.providerFormat,
-		...(command.apiKey ? { apiKey: command.apiKey } : {}),
-	});
-	return registry;
+function commandAgent(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): AgentSpec {
+	return {
+		id: "model-routing-command",
+		version: "0.0.0",
+		name: "Model Routing Command",
+		kind: "baseline",
+		model: { provider: command.provider, model: command.model },
+		...(command.modelRouting ? { modelRouting: command.modelRouting } : {}),
+		prompts: { system: "" },
+		tools: { allowedTools: [] },
+		runtime: { maxTurns: 1 },
+	};
 }
 
 function memoryProjectId(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): string {

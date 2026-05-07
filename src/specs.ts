@@ -1,3 +1,5 @@
+import type { ModelPurpose } from "./models/types.js";
+
 export type AgentSpecKind = "baseline" | "candidate";
 export type TaskType = "coding" | "tool" | "general" | "business";
 
@@ -6,6 +8,16 @@ export interface ModelSpec {
 	model: string;
 	reasoningLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	options?: Record<string, unknown>;
+}
+
+export interface ModelRoutingSpec {
+	aliases?: Record<string, ModelSpec>;
+	routes?: Partial<Record<ModelPurpose, string>>;
+	defaultAlias?: string;
+	purposeRules?: {
+		codingTasks?: boolean;
+		toolHeavy?: boolean;
+	};
 }
 
 export interface PromptSpec {
@@ -34,6 +46,7 @@ export interface AgentSpec {
 	name: string;
 	kind: AgentSpecKind;
 	model: ModelSpec;
+	modelRouting?: ModelRoutingSpec;
 	prompts: PromptSpec;
 	tools: ToolPolicySpec;
 	runtime: RuntimePolicySpec;
