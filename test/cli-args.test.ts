@@ -1,11 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { parseCliArgs } from "../src/cli/args.js";
+import { helpText, parseCliArgs } from "../src/cli/args.js";
 
 describe("parseCliArgs", () => {
 	it("parses models discover", () => {
 		const result = parseCliArgs(["models", "discover", "--provider", "local", "--base-url", "http://localhost:8317/v1"]);
 		expect(result.diagnostics).toEqual([]);
 		expect(result.command).toMatchObject({ kind: "models.discover", provider: "local", providerFormat: "openai-responses" });
+	});
+
+	it("parses MCP status commands", () => {
+		const status = parseCliArgs(["mcp", "status", "--json"]);
+		expect(status.diagnostics).toEqual([]);
+		expect(status.command).toMatchObject({ kind: "mcp.status", format: "json" });
+
+		const diagnostics = parseCliArgs(["mcp", "diagnostics"], { mcpServers: { docs: { type: "stdio", command: "node" } } });
+		expect(diagnostics.diagnostics).toEqual([]);
+		expect(diagnostics.command).toMatchObject({ kind: "mcp.diagnostics", mcpServers: { docs: { command: "node" } } });
+	});
+
+	it("includes MCP commands in help text", () => {
+		expect(helpText()).toContain("evolving-agent mcp status");
+		expect(helpText()).toContain("evolving-agent mcp diagnostics");
 	});
 
 	it("parses chat", () => {
@@ -18,6 +33,13 @@ describe("parseCliArgs", () => {
 		const result = parseCliArgs(["chat", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url"]);
 		expect(result.diagnostics).toEqual([]);
 		expect(result.command).toMatchObject({ kind: "chat", agentPath: "agent.json", model: "model", toolProfile: "dangerous" });
+		expect(result.command).not.toHaveProperty("prompt");
+	});
+
+	it("parses tui", () => {
+		const result = parseCliArgs(["tui", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--session", "demo"]);
+		expect(result.diagnostics).toEqual([]);
+		expect(result.command).toMatchObject({ kind: "tui", agentPath: "agent.json", model: "model", sessionId: "demo", toolProfile: "dangerous" });
 		expect(result.command).not.toHaveProperty("prompt");
 	});
 

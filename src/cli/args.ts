@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ProviderFormat } from "../models/provider-types.js";
 import type { BenchmarkReportFormat } from "../benchmark/report.js";
 import type { EvolutionReportFormat } from "../evolution/report.js";
+import type { McpServersConfig } from "../mcp/types.js";
 import { parseToolProfile, type ToolProfile } from "../tools/profiles.js";
 
 export type OutputFormat = "human" | "json";
@@ -15,6 +16,7 @@ export interface CliDefaults {
 	providerFormat?: ProviderFormat;
 	toolProfile?: ToolProfile;
 	sessionDir?: string;
+	mcpServers?: McpServersConfig;
 }
 
 export interface CliProvidedFlags {
@@ -27,7 +29,7 @@ export interface CliProvidedFlags {
 	sessionDir?: boolean;
 }
 
-export type CliCommand = ModelsDiscoverCommand | ChatCommand | RunCommand | BenchmarkCommand | EvolveCommand | ReplayCommand | DiffCommand | HelpCommand;
+export type CliCommand = ModelsDiscoverCommand | McpStatusCommand | McpDiagnosticsCommand | ChatCommand | TuiCommand | RunCommand | BenchmarkCommand | EvolveCommand | ReplayCommand | DiffCommand | HelpCommand;
 
 export interface BaseCommand {
 	format: OutputFormat;
@@ -43,7 +45,19 @@ export interface ModelsDiscoverCommand extends BaseCommand {
 	providerFormat: ProviderFormat;
 }
 
-export interface ChatCommand extends BaseCommand {
+export interface McpCommandFields {
+	mcpServers?: McpServersConfig;
+}
+
+export interface McpStatusCommand extends BaseCommand, McpCommandFields {
+	kind: "mcp.status";
+}
+
+export interface McpDiagnosticsCommand extends BaseCommand, McpCommandFields {
+	kind: "mcp.diagnostics";
+}
+
+export interface ChatCommand extends BaseCommand, McpCommandFields {
 	kind: "chat";
 	prompt?: string;
 	agentPath?: string;
@@ -59,7 +73,11 @@ export interface ChatCommand extends BaseCommand {
 	providedFlags: CliProvidedFlags;
 }
 
-export interface RunCommand extends BaseCommand {
+export interface TuiCommand extends Omit<ChatCommand, "kind" | "prompt"> {
+	kind: "tui";
+}
+
+export interface RunCommand extends BaseCommand, McpCommandFields {
 	kind: "run";
 	agentPath: string;
 	taskPath: string;
@@ -71,7 +89,7 @@ export interface RunCommand extends BaseCommand {
 	toolProfile: ToolProfile;
 }
 
-export interface BenchmarkCommand extends BaseCommand {
+export interface BenchmarkCommand extends BaseCommand, McpCommandFields {
 	kind: "benchmark";
 	agentPath: string;
 	suitePath: string;
@@ -85,7 +103,7 @@ export interface BenchmarkCommand extends BaseCommand {
 	reportPath?: string;
 }
 
-export interface EvolveCommand extends BaseCommand {
+export interface EvolveCommand extends BaseCommand, McpCommandFields {
 	kind: "evolve";
 	baselineAgentPath: string;
 	candidateAgentPath: string;
@@ -152,8 +170,17 @@ export function parseCliArgs(args: string[], defaults: CliDefaults = {}): ParseR
 	if (commandParts.kind === "models.discover") {
 		return parseCommandResult(buildModelsDiscover(flags, common, resolvedDefaults, diagnostics), diagnostics);
 	}
+	if (commandParts.kind === "mcp.status") {
+		return parseCommandResult(buildMcpStatus(common, resolvedDefaults), diagnostics);
+	}
+	if (commandParts.kind === "mcp.diagnostics") {
+		return parseCommandResult(buildMcpDiagnostics(common, resolvedDefaults), diagnostics);
+	}
 	if (commandParts.kind === "chat") {
 		return parseCommandResult(buildChat(flags, parsedArgs.prompt, common, resolvedDefaults, diagnostics), diagnostics);
+	}
+	if (commandParts.kind === "tui") {
+		return parseCommandResult(buildTui(flags, common, resolvedDefaults, diagnostics), diagnostics);
 	}
 	if (commandParts.kind === "run") {
 		return parseCommandResult(buildRun(flags, common, resolvedDefaults, diagnostics), diagnostics);
@@ -175,8 +202,11 @@ export function helpText(): string {
 
 Usage:
   evolving-agent models discover --provider <id> --base-url <url> [--api-key <key>] [--config <file>] [--json]
+  evolving-agent mcp status [--config <file>] [--json]
+  evolving-agent mcp diagnostics [--config <file>] [--json]
   evolving-agent chat "<prompt>" [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--session <id>|--resume <id>] [--api-key <key>] [--tool-profile <profile>] [--config <file>] [--json]
   evolving-agent chat [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--session <id>|--resume <id>] [--api-key <key>] [--tool-profile <profile>] [--config <file>]
+  evolving-agent tui [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--session <id>|--resume <id>] [--api-key <key>] [--tool-profile <profile>] [--config <file>]
   evolving-agent run [--agent <file>] --task <file> [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>] [--tool-profile <profile>] [--config <file>] [--json]
   evolving-agent benchmark --suite <file> [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>] [--tool-profile <profile>] [--report <file>] [--report-format <json|markdown>] [--config <file>] [--json]
   evolving-agent evolve --suite <file> --baseline-agent <file> --candidate-agent <file> [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>] [--tool-profile <profile>] [--report <file>] [--report-format <json|markdown>] [--history <file>] [--config <file>] [--json]
@@ -210,7 +240,10 @@ Options:
 
 function parseCommandParts(args: string[]): { kind: CliCommand["kind"]; consumed: number } | undefined {
 	if (args[0] === "models" && args[1] === "discover") return { kind: "models.discover", consumed: 2 };
+	if (args[0] === "mcp" && args[1] === "status") return { kind: "mcp.status", consumed: 2 };
+	if (args[0] === "mcp" && args[1] === "diagnostics") return { kind: "mcp.diagnostics", consumed: 2 };
 	if (args[0] === "chat") return { kind: "chat", consumed: 1 };
+	if (args[0] === "tui") return { kind: "tui", consumed: 1 };
 	if (args[0] === "run") return { kind: "run", consumed: 1 };
 	if (args[0] === "benchmark") return { kind: "benchmark", consumed: 1 };
 	if (args[0] === "evolve") return { kind: "evolve", consumed: 1 };
@@ -317,6 +350,26 @@ function buildModelsDiscover(
 	};
 }
 
+function buildMcpStatus(common: BaseCommand & { providerFormat: ProviderFormat }, defaults: CliDefaults): McpStatusCommand {
+	return {
+		kind: "mcp.status",
+		format: common.format,
+		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
+		...(common.outputPath ? { outputPath: common.outputPath } : {}),
+		...(common.tracePath ? { tracePath: common.tracePath } : {}),
+	};
+}
+
+function buildMcpDiagnostics(common: BaseCommand & { providerFormat: ProviderFormat }, defaults: CliDefaults): McpDiagnosticsCommand {
+	return {
+		kind: "mcp.diagnostics",
+		format: common.format,
+		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
+		...(common.outputPath ? { outputPath: common.outputPath } : {}),
+		...(common.tracePath ? { tracePath: common.tracePath } : {}),
+	};
+}
+
 function buildChat(flags: FlagValues, prompt: string | undefined, common: BaseCommand & { providerFormat: ProviderFormat }, defaults: CliDefaults, diagnostics: string[]): ChatCommand | undefined {
 	const sessionId = stringFlag(flags, "--session");
 	const resumeSessionId = stringFlag(flags, "--resume");
@@ -344,9 +397,17 @@ function buildChat(flags: FlagValues, prompt: string | undefined, common: BaseCo
 		...(resumeSessionId ? { resumeSessionId } : {}),
 		...(sessionDir ? { sessionDir } : {}),
 		providedFlags: chatProvidedFlags(flags),
+		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
 		...(common.tracePath ? { tracePath: common.tracePath } : {}),
 	};
+}
+
+function buildTui(flags: FlagValues, common: BaseCommand & { providerFormat: ProviderFormat }, defaults: CliDefaults, diagnostics: string[]): TuiCommand | undefined {
+	const chat = buildChat(flags, undefined, common, defaults, diagnostics);
+	if (!chat) return undefined;
+	const { kind: _kind, prompt: _prompt, ...rest } = chat;
+	return { ...rest, kind: "tui" };
 }
 
 function buildRun(flags: FlagValues, common: BaseCommand & { providerFormat: ProviderFormat }, defaults: CliDefaults, diagnostics: string[]): RunCommand | undefined {
@@ -369,6 +430,7 @@ function buildRun(flags: FlagValues, common: BaseCommand & { providerFormat: Pro
 		toolProfile,
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
+		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
 		...(common.tracePath ? { tracePath: common.tracePath } : {}),
 	};
@@ -402,6 +464,7 @@ function buildBenchmark(
 		reportFormat,
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
+		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
 		...(reportPath ? { reportPath } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),
 		...(common.tracePath ? { tracePath: common.tracePath } : {}),
@@ -439,6 +502,7 @@ function buildEvolve(
 		reportFormat,
 		format: common.format,
 		...(apiKey ? { apiKey } : {}),
+		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
 		...(reportPath ? { reportPath } : {}),
 		...(historyPath ? { historyPath } : {}),
 		...(common.outputPath ? { outputPath: common.outputPath } : {}),

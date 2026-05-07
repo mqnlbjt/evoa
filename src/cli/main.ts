@@ -1,4 +1,5 @@
-import { handleBenchmark, handleChat, handleDiff, handleEvolve, handleModelsDiscover, handleReplay, handleRun, writeOptionalFiles, type CliDeps, type CliResult } from "./commands.js";
+import { handleBenchmark, handleChat, handleDiff, handleEvolve, handleMcpDiagnostics, handleMcpStatus, handleModelsDiscover, handleReplay, handleRun, writeOptionalFiles, type CliDeps, type CliResult } from "./commands.js";
+import { handleTui } from "./tui-command.js";
 import { formatJson } from "./format.js";
 import { configPathFromArgs, helpText, parseCliArgs, type CliCommand } from "./args.js";
 import { loadCliDefaults } from "./config.js";
@@ -39,7 +40,10 @@ export async function main(args: string[], deps: CliDeps = {}): Promise<number> 
 
 async function runCommand(command: CliCommand, deps: CliDeps): Promise<CliResult> {
 	if (command.kind === "models.discover") return handleModelsDiscover(command, deps);
+	if (command.kind === "mcp.status") return handleMcpStatus(command, deps);
+	if (command.kind === "mcp.diagnostics") return handleMcpDiagnostics(command, deps);
 	if (command.kind === "chat") return handleChat(command, deps);
+	if (command.kind === "tui") return handleTui(command, deps);
 	if (command.kind === "run") return handleRun(command, deps);
 	if (command.kind === "benchmark") return handleBenchmark(command, deps);
 	if (command.kind === "evolve") return handleEvolve(command, deps);

@@ -1,0 +1,15 @@
+{
+	"agents": [
+		{
+			"id": "tui-basic",
+			"version": "1.0.0",
+			"name": "TUI Basic",
+			"kind": "baseline",
+			"model": { "provider": "local", "model": "gpt-5.4-mini" },
+			"prompts": { "system": "You are concise." },
+			"tools": { "allowedTools": [], "permissionMode": "allow" },
+			"runtime": { "maxTurns": 1, "contextCompression": "off", "memoryPolicy": "none" }
+		}
+	],
+	"subagents": []
+}

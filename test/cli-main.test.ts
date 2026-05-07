@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli/main.js";
 import type { OpenAIResponsesClient } from "../src/models/openai-client.js";
+import type { McpClientHandle } from "../src/mcp/types.js";
 import { createIO, fakeOpenAIClient, fakeToolOpenAIClient, lines, nextId } from "./helpers/cli.js";
+import { FakeTerminal } from "../src/tui/fake-terminal.js";
 
 const agentPath = "/home/wyq/data/pi/evolving-agent/examples/agents/basic.json";
 const taskPath = "/home/wyq/data/pi/evolving-agent/examples/tasks/smoke.json";
@@ -80,12 +82,29 @@ describe("CLI main", () => {
 		expect(io.stdoutText()).toBe("hi\n");
 	});
 
+	it("runs tui with a fake terminal", async () => {
+		const io = createIO();
+		const terminal = new FakeTerminal();
+		const codePromise = main([
+			"tui", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
+		], { ...io, createTerminal: () => terminal, openAIClientFactory: () => fakeOpenAIClient("hi"), now: () => 1, createId: nextId() });
+		await waitFor(() => terminal.outputText().includes("evolving-agent"));
+		terminal.emitInput("/exit");
+		terminal.emitInput("\n");
+		const code = await codePromise;
+
+		expect(code).toBe(0);
+		expect(io.stdoutText()).toBe("");
+		expect(terminal.outputText()).toContain("evolving-agent | Basic Agent");
+		expect(terminal.isDisposed()).toBe(true);
+	});
+
 	it("runs chat as an interactive REPL", async () => {
 		const io = createIO();
 		let calls = 0;
 		const code = await main([
 			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
-		], { ...io, inputLines: lines(["hello", "/exit"]), openAIClientFactory: () => ({ responses: { async create() { calls += 1; return { output_text: "hi" }; } } }), now: () => 1, createId: nextId() });
+		], { ...io, inputLines: lines(["hello", "/exit"]), openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); calls += 1; return { output_text: "hi" }; } } }), now: () => 1, createId: nextId() });
 
 		expect(code).toBe(0);
 		expect(calls).toBe(1);
@@ -97,7 +116,7 @@ describe("CLI main", () => {
 		let calls = 0;
 		const code = await main([
 			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
-		], { ...io, inputLines: lines(["", "   ", "/quit"]), openAIClientFactory: () => ({ responses: { async create() { calls += 1; return { output_text: "hi" }; } } }), now: () => 1, createId: nextId() });
+		], { ...io, inputLines: lines(["", "   ", "/quit"]), openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); calls += 1; return { output_text: "hi" }; } } }), now: () => 1, createId: nextId() });
 
 		expect(code).toBe(0);
 		expect(calls).toBe(0);
@@ -110,7 +129,7 @@ describe("CLI main", () => {
 		let seenInput: unknown;
 		const code = await main([
 			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
-		], { ...io, inputLines: lines(["remember", "recall", "/exit"]), openAIClientFactory: () => ({ responses: { async create(input) { calls += 1; if (calls === 2) seenInput = input; return { output_text: calls === 1 ? "stored" : "recalled" }; } } }), now: () => 1, createId: nextId() });
+		], { ...io, inputLines: lines(["remember", "recall", "/exit"]), openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); calls += 1; if (calls === 2) seenInput = input; return { output_text: calls === 1 ? "stored" : "recalled" }; } } }), now: () => 1, createId: nextId() });
 
 		expect(code).toBe(0);
 		expect(calls).toBe(2);
@@ -126,7 +145,7 @@ describe("CLI main", () => {
 		let calls = 0;
 		const code = await main([
 			"chat", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
-		], { ...io, inputLines: lines(["one", "two", "/exit"]), openAIClientFactory: () => ({ responses: { async create() { calls += 1; return { output_text: `answer-${calls}` }; } } }), now: () => 1, createId: nextId() });
+		], { ...io, inputLines: lines(["one", "two", "/exit"]), openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); calls += 1; return { output_text: `answer-${calls}` }; } } }), now: () => 1, createId: nextId() });
 
 		expect(code).toBe(0);
 		expect(calls).toBe(2);
@@ -144,7 +163,7 @@ describe("CLI main", () => {
 		const io2 = createIO();
 		const code = await main([
 			"chat", "recall", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--resume", "demo", "--session-dir", root, "--json",
-		], { ...io2, openAIClientFactory: () => ({ responses: { async create(input) { seenInput = input; return { output_text: "recalled" }; } } }), now: () => 2, createId: nextId() });
+		], { ...io2, openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); seenInput = input; return { output_text: "recalled" }; } } }), now: () => 2, createId: nextId() });
 
 		expect(code).toBe(0);
 		expect(JSON.parse(io2.stdoutText())).toMatchObject({ ok: true, answer: "recalled", sessionId: "demo" });
@@ -166,7 +185,7 @@ describe("CLI main", () => {
 		const io2 = createIO();
 		const code = await main([
 			"chat", "recall", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--resume", "demo", "--session-dir", root, "--json",
-		], { ...io2, openAIClientFactory: () => ({ responses: { async create(input) { seenInput = input; return { output_text: "recalled" }; } } }), now: () => 2, createId: nextId() });
+		], { ...io2, openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); seenInput = input; return { output_text: "recalled" }; } } }), now: () => 2, createId: nextId() });
 
 		expect(code).toBe(0);
 		expect(JSON.parse(io2.stdoutText())).toMatchObject({ ok: true, answer: "recalled", sessionId: "demo" });
@@ -410,6 +429,48 @@ describe("CLI main", () => {
 
 		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, status: "passed" });
 	});
+
+	it("reports MCP status as JSON", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const configPath = path.join(root, "config.json");
+		await writeFile(configPath, JSON.stringify({ mcpServers: { docs: { type: "stdio", command: "node" }, optional: { type: "stdio", command: "missing", optional: true } } }));
+		const io = createIO();
+		const code = await main(["mcp", "status", "--config", configPath, "--json"], {
+			...io,
+			mcpClientFactory: async (name) => {
+				if (name === "optional") throw new Error("not installed");
+				return fakeMcpClient(name);
+			},
+		});
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, command: "mcp.status", summary: { connected: 1, optionalFailures: 1 }, servers: expect.arrayContaining([expect.objectContaining({ name: "docs", state: "connected" }), expect.objectContaining({ name: "optional", state: "failed" })]) });
+	});
+
+	it("reports MCP diagnostics with tool details", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const configPath = path.join(root, "config.json");
+		await writeFile(configPath, JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer secret" } } } }));
+		const io = createIO();
+		const code = await main(["mcp", "diagnostics", "--config", configPath, "--json"], { ...io, mcpClientFactory: async (name) => fakeMcpClient(name) });
+
+		expect(code).toBe(0);
+		const output = JSON.parse(io.stdoutText());
+		expect(output).toMatchObject({ ok: true, command: "mcp.diagnostics", servers: [{ name: "docs", type: "http", url: "https://example.com/mcp", headerKeys: ["Authorization"], tools: [{ name: "search", qualifiedName: "mcp__docs__search" }] }] });
+		expect(io.stdoutText()).not.toContain("Bearer secret");
+	});
+
+	it("returns a failing exit code for required MCP status failures", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-cli-"));
+		const configPath = path.join(root, "config.json");
+		await writeFile(configPath, JSON.stringify({ mcpServers: { required: { type: "sse", url: "https://example.com/sse" } } }));
+		const io = createIO();
+		const code = await main(["mcp", "status", "--config", configPath], { ...io, mcpClientFactory: async () => { throw new Error("missing"); } });
+
+		expect(code).toBe(1);
+		expect(io.stdoutText()).toContain("required");
+		expect(io.stdoutText()).toContain("failed");
+	});
 });
 
 function taskRunFixture(runId: string, taskId: string, status: "passed" | "failed" | "errored" | "timeout", scoreValue: number) {
@@ -437,6 +498,34 @@ function taskRunFixture(runId: string, taskId: string, status: "passed" | "faile
 			{ id: `${runId}-start`, type: "run_start", timestamp: 1, agentId: agent.id, taskId, payload: {} },
 			{ id: `${runId}-end`, type: "run_end", timestamp: 2, agentId: agent.id, taskId, payload: {} },
 		],
+	};
+}
+
+function isMemoryExtractionRequest(input: { instructions?: unknown }): boolean {
+	return input.instructions === "Extract structured long-term memory candidates as strict JSON.";
+}
+
+function invalidMemoryExtraction(): { output_text: string } {
+	return { output_text: "not json" };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 20; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	throw new Error("condition was not met");
+}
+
+function fakeMcpClient(name: string): McpClientHandle {
+	return {
+		serverName: name,
+		status: { state: "connected", serverName: name },
+		async listTools() { return [{ name: "search", description: "Search docs", inputSchema: { type: "object" } }]; },
+		async callTool() { return { content: [{ type: "text", text: "ok" }] }; },
+		async listResources() { return []; },
+		async readResource() { return { contents: [] }; },
+		async close() {},
 	};
 }
 
