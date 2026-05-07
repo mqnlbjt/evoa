@@ -1,7 +1,7 @@
 import type { SuiteRunResult } from "../benchmark/types.js";
 
 export interface VerificationIssue {
-	type: "regression" | "error" | "timeout" | "tool-policy";
+	type: "regression" | "error" | "timeout" | "tool-policy" | "memory-regression";
 	severity: "blocking" | "warning";
 	taskId: string;
 	message: string;
@@ -36,6 +36,11 @@ export function verifyEvolutionComparison(baseline: SuiteRunResult, candidate: S
 				issues.push(blockingIssue("tool-policy", run.task.id, payload.errorMessage ?? payload.decision.reason ?? "tool use denied"));
 			}
 		}
+		const baselineMemory = memoryIssueCount(baselineRun?.score.details);
+		const candidateMemory = memoryIssueCount(run.score.details);
+		if (candidateMemory > baselineMemory) {
+			issues.push(blockingIssue("memory-regression", run.task.id, `candidate memory issues increased from ${baselineMemory} to ${candidateMemory}`));
+		}
 	}
 
 	const blocking = issues.some((issue) => issue.severity === "blocking");
@@ -49,4 +54,14 @@ export function verifyEvolutionComparison(baseline: SuiteRunResult, candidate: S
 
 function blockingIssue(type: VerificationIssue["type"], taskId: string, message: string): VerificationIssue {
 	return { type, severity: "blocking", taskId, message };
+}
+
+function memoryIssueCount(details: Record<string, unknown> | undefined): number {
+	const memory = details && typeof details.memory === "object" && details.memory !== null ? details.memory as Record<string, unknown> : undefined;
+	return numberField(memory, "contaminationCount") + numberField(memory, "missingSourceRefs") + numberField(memory, "revokedCount");
+}
+
+function numberField(value: Record<string, unknown> | undefined, key: string): number {
+	const field = value?.[key];
+	return typeof field === "number" ? field : 0;
 }

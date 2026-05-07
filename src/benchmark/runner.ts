@@ -39,21 +39,29 @@ export class BenchmarkRunner {
 
 	async runSuite(agent: AgentSpec, suite: BenchmarkSuite, signal?: AbortSignal): Promise<SuiteRunResult> {
 		const runs: AgentTaskRunResult[] = [];
-		for (const task of suite.tasks) {
-			const run = await this.runTask(agent, task, signal);
-			runs.push(run);
+		try {
+			for (const task of suite.tasks) {
+				const run = await this.runTaskWithoutClosing(agent, task, signal, false);
+				runs.push(run);
+			}
+			const result: SuiteRunResult = {
+				agent,
+				suite,
+				runs,
+				summary: summarizeRuns(runs),
+			};
+			await this.store?.saveSuiteRun(result);
+			return result;
+		} finally {
+			await this.runtime.close?.();
 		}
-		const result: SuiteRunResult = {
-			agent,
-			suite,
-			runs,
-			summary: summarizeRuns(runs),
-		};
-		await this.store?.saveSuiteRun(result);
-		return result;
 	}
 
 	async runTask(agent: AgentSpec, task: TaskSpec, signal?: AbortSignal): Promise<AgentTaskRunResult> {
+		return this.runTaskWithoutClosing(agent, task, signal, true);
+	}
+
+	private async runTaskWithoutClosing(agent: AgentSpec, task: TaskSpec, signal: AbortSignal | undefined, closeRuntime: boolean): Promise<AgentTaskRunResult> {
 		const runId = this.createId();
 		const startedAt = this.now();
 		const trace: TraceEvent[] = [this.event<RunStartPayload>("run_start", agent, task, { agent, task })];
@@ -97,8 +105,12 @@ export class BenchmarkRunner {
 			...(output.artifacts ? { artifacts: output.artifacts } : {}),
 			...(errorMessage ? { errorMessage } : {}),
 		};
-		await this.store?.saveTaskRun(result);
-		return result;
+		try {
+			await this.store?.saveTaskRun(result);
+			return result;
+		} finally {
+			if (closeRuntime) await this.runtime.close?.();
+		}
 	}
 
 	private event<TPayload>(type: TraceEvent["type"], agent: AgentSpec, task: TaskSpec, payload: TPayload): TraceEvent<TPayload> {

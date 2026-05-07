@@ -13,6 +13,8 @@ export function replayTrace(input: TraceReplayInput): TraceReplaySummary {
 	let toolCallCount = 0;
 	let toolResultCount = 0;
 	let errorCount = 0;
+	let memoryContextCount = 0;
+	let memoryWarningCount = 0;
 	let hasRunStart = false;
 	let hasTerminalEvent = false;
 	let previousTimestamp: number | undefined;
@@ -27,7 +29,11 @@ export function replayTrace(input: TraceReplayInput): TraceReplaySummary {
 		if (input.taskId && event.taskId !== input.taskId) warnings.push(`event ${event.id} has unexpected taskId ${event.taskId}`);
 		if (event.type === "run_start") hasRunStart = true;
 		if (event.type === "run_end" || event.type === "error") hasTerminalEvent = true;
-		if (event.type === "model_request") modelRequestCount += 1;
+		if (event.type === "model_request") {
+			modelRequestCount += 1;
+			const payload = isRecord(event.payload) ? event.payload : {};
+			if (isRecord(payload.memoryContext)) memoryContextCount += 1;
+		}
 		if (event.type === "model_response") modelResponseCount += 1;
 		if (event.type === "tool_call") {
 			toolCallCount += 1;
@@ -38,6 +44,10 @@ export function replayTrace(input: TraceReplayInput): TraceReplaySummary {
 			toolResults.add(callId(event));
 		}
 		if (event.type === "error") errorCount += 1;
+		if (event.type === "score") {
+			const memory = scoreMemory(event.payload);
+			memoryWarningCount += memory.missingSourceRefs + memory.contaminationCount;
+		}
 	}
 
 	for (const id of toolCalls) {
@@ -63,6 +73,8 @@ export function replayTrace(input: TraceReplayInput): TraceReplaySummary {
 		toolCallCount,
 		toolResultCount,
 		errorCount,
+		memoryContextCount,
+		memoryWarningCount,
 		warnings,
 	};
 }
@@ -144,6 +156,15 @@ function callId(event: TraceEvent): string {
 function toolResultOutput(event: TraceEvent): unknown {
 	const payload = isRecord(event.payload) ? event.payload : {};
 	return payload.output;
+}
+
+function scoreMemory(payload: unknown): { missingSourceRefs: number; contaminationCount: number } {
+	const details = isRecord(payload) && isRecord(payload.details) ? payload.details : undefined;
+	const memory = details && isRecord(details.memory) ? details.memory : undefined;
+	return {
+		missingSourceRefs: typeof memory?.missingSourceRefs === "number" ? memory.missingSourceRefs : 0,
+		contaminationCount: typeof memory?.contaminationCount === "number" ? memory.contaminationCount : 0,
+	};
 }
 
 function isSubagentOutput(value: unknown): value is {

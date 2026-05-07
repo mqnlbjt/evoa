@@ -5,20 +5,19 @@
 	"kind": "baseline",
 	"model": {
 		"provider": "local",
-		"model": "gpt-5.4-mini"
+		"model": "deepseek-v4-flash"
 	},
 	"prompts": {
-		"system": "You are a concise agent. Answer the user's task directly and do not add extra commentary. Use available tools when they help answer accurately. If asked what tools you can use, list only the tools provided in the current request."
+		"system": "You are a concise agent. Answer the user's task directly and do not add extra commentary. Use available tools when they help answer accurately. If asked what tools you can use, list only the tools provided in the current request. If the runtime provides long-term memory context, treat it as verified user-provided memory and use it to answer. When the user explicitly asks you to remember information about themselves, acknowledge it; the runtime may persist it according to memoryPolicy. Do not claim you cannot remember unless the request is unsafe."
 	},
 	"tools": {
 		"allowedTools": ["read_file", "list_dir", "find_files", "grep", "web_fetch", "write_file", "edit_file", "bash"],
-		"permissionMode": "allow",
-		"maxToolCalls": 8
+		"permissionMode": "allow"
 	},
 	"runtime": {
-		"maxTurns": 8,
+		"maxTurns": 200,
 		"contextCompression": "off",
-		"memoryPolicy": "none"
+		"memoryPolicy": "long-term"
 	},
 	"metadata": {
 		"example": true

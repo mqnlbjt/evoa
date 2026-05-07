@@ -35,6 +35,8 @@ export interface TraceReplaySummary {
 	toolCallCount: number;
 	toolResultCount: number;
 	errorCount: number;
+	memoryContextCount: number;
+	memoryWarningCount: number;
 	warnings: string[];
 }
 

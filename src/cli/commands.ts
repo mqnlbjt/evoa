@@ -16,14 +16,21 @@ import type { AgentTaskRunResult, SuiteRunResult } from "../benchmark/types.js";
 import { ModelRegistry, type ModelRegistryOptions } from "../models/registry.js";
 import { loadTaskSpecFromFile } from "../tasks/loader.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
-import type { ChatCommand, BenchmarkCommand, DiffCommand, EvolveCommand, ModelsDiscoverCommand, ReplayCommand, RunCommand } from "./args.js";
+import type { ChatCommand, BenchmarkCommand, DiffCommand, EvolveCommand, McpDiagnosticsCommand, McpStatusCommand, ModelsDiscoverCommand, ReplayCommand, RunCommand } from "./args.js";
 import { formatPercent, formatTable } from "./format.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { createToolRegistryForProfile } from "../tools/profiles.js";
+import { diagnoseMcpServers, type McpDiagnosticsReport, type McpServerDiagnostic } from "../mcp/diagnostics.js";
+import type { McpClientHandle, McpServersConfig } from "../mcp/types.js";
+import type { Terminal } from "../tui/terminal.js";
+import { createToolRegistryForProfileAsync } from "../tools/profiles.js";
 import { replayTraceSource } from "../replay/trace-replay.js";
 import { createAgentSession, appendUserMessage } from "../runtime/session.js";
-import type { ModelMessage } from "../models/types.js";
+import type { ModelClient, ModelMessage } from "../models/types.js";
 import { JsonSessionStore } from "../sessions/json-session-store.js";
+import { JsonMemoryStore } from "../memory/json-memory-store.js";
+import { LlmMemoryExtractor } from "../memory/llm-extractor.js";
+import { MemoryManager } from "../memory/manager.js";
+import { createMemoryTools, memoryToolNames } from "../memory/tools.js";
 import type { AgentSessionStore, StoredAgentSession, StoredAgentStartupContext } from "../sessions/session-store.js";
 import { diffRunSources } from "../replay/run-diff.js";
 
@@ -39,6 +46,8 @@ export interface CliDeps {
 	workspaceRoot?: string;
 	now?: () => number;
 	createId?: () => string;
+	createTerminal?: () => Terminal;
+	mcpClientFactory?: (serverName: string, config: McpServersConfig[string]) => Promise<McpClientHandle>;
 }
 
 export interface CliResult {
@@ -50,7 +59,7 @@ export interface CliResult {
 }
 
 export async function handleModelsDiscover(command: ModelsDiscoverCommand, deps: CliDeps): Promise<CliResult> {
-	const registry = createRegistry(command, deps);
+	const registry = createModelRegistry(command, deps);
 	const models = (await registry.discover(command.provider)).sort((left, right) => left.id.localeCompare(right.id));
 	const json = { ok: true, command: command.kind, provider: command.provider, models };
 	return {
@@ -60,23 +69,38 @@ export async function handleModelsDiscover(command: ModelsDiscoverCommand, deps:
 	};
 }
 
+export async function handleMcpStatus(command: McpStatusCommand, deps: CliDeps): Promise<CliResult> {
+	const report = await diagnoseMcpServers({ ...(command.mcpServers ? { servers: command.mcpServers } : {}), ...(deps.mcpClientFactory ? { clientFactory: deps.mcpClientFactory } : {}) });
+	return mcpResult(command.kind, report, formatMcpStatusHuman(report));
+}
+
+export async function handleMcpDiagnostics(command: McpDiagnosticsCommand, deps: CliDeps): Promise<CliResult> {
+	const report = await diagnoseMcpServers({ ...(command.mcpServers ? { servers: command.mcpServers } : {}), includeDetails: true, ...(deps.mcpClientFactory ? { clientFactory: deps.mcpClientFactory } : {}) });
+	return mcpResult(command.kind, report, formatMcpDiagnosticsHuman(report));
+}
+
 export async function handleChat(command: ChatCommand, deps: CliDeps): Promise<CliResult> {
 	if (!command.prompt) return handleChatRepl(command, deps);
 	const context = await createChatContext(command, deps);
-	const output = await runChatTurn(context, command.prompt);
-	return {
-		exitCode: 0,
-		json: { ok: true, command: command.kind, agentId: context.agent.id, answer: output.answer, sessionId: context.sessionId },
-		trace: { sessionId: context.sessionId, answer: output.answer, trace: output.trace },
-		human: output.answer,
-	};
+	try {
+		const output = await runChatTurn(context, command.prompt);
+		return {
+			exitCode: 0,
+			json: { ok: true, command: command.kind, agentId: context.agent.id, answer: output.answer, sessionId: context.sessionId },
+			trace: { sessionId: context.sessionId, answer: output.answer, trace: output.trace },
+			human: output.answer,
+		};
+	} finally {
+		await context.runtime.close();
+	}
 }
 
 export async function handleRun(command: RunCommand, deps: CliDeps): Promise<CliResult> {
 	const bundle = await loadAgentBundle(command.agentPath);
 	const agent = effectiveAgent(bundle.agent, command.provider, command.model);
 	const task = await loadTaskSpecFromFile(command.taskPath);
-	const result = await createRunner(command, deps, bundle.subagents).runTask(agent, task);
+	const runner = await createRunner(command, deps, bundle.subagents);
+	const result = await runner.runTask(agent, task);
 	const json = runJson(command.kind, result);
 	return {
 		exitCode: result.status === "errored" || result.status === "timeout" ? 1 : 0,
@@ -90,7 +114,8 @@ export async function handleBenchmark(command: BenchmarkCommand, deps: CliDeps):
 	const bundle = await loadAgentBundle(command.agentPath);
 	const agent = effectiveAgent(bundle.agent, command.provider, command.model);
 	const suite = await loadBenchmarkSuiteFromFile(command.suitePath);
-	const result = await createRunner(command, deps, bundle.subagents).runSuite(agent, suite);
+	const runner = await createRunner(command, deps, bundle.subagents);
+	const result = await runner.runSuite(agent, suite);
 	const json = benchmarkJson(result);
 	const report = command.reportPath ? createBenchmarkReport(result) : undefined;
 	return {
@@ -178,6 +203,8 @@ interface ChatContext {
 	sessionId: string;
 	messages: ModelMessage[];
 	now: () => number;
+	createId: () => string;
+	memoryManager?: MemoryManager;
 }
 
 async function handleChatRepl(command: ChatCommand, deps: CliDeps): Promise<CliResult> {
@@ -197,6 +224,7 @@ async function handleChatRepl(command: ChatCommand, deps: CliDeps): Promise<CliR
 		}
 	} finally {
 		close?.();
+		await context.runtime.close();
 	}
 	return {
 		exitCode: 0,
@@ -212,8 +240,10 @@ async function createChatContext(command: ChatCommand, deps: CliDeps): Promise<C
 	const resolvedCommand = resolveChatCommand(command, stored);
 	const bundle = await loadAgentBundle(resolvedCommand.agentPath);
 	const agent = effectiveAgent(bundle.agent, resolvedCommand.provider, resolvedCommand.model);
-	const runtime = createRuntime(resolvedCommand, deps, bundle.subagents);
 	const sessionId = resolvedCommand.resumeSessionId ?? resolvedCommand.sessionId ?? (deps.createId?.() ?? crypto.randomUUID());
+	const modelClient = createModelClient(resolvedCommand, deps);
+	const memoryManager = createMemoryManager(agent, resolvedCommand, modelClient);
+	const runtime = await createRuntime(resolvedCommand, deps, bundle.subagents, memoryManager, modelClient);
 	return {
 		command: resolvedCommand,
 		agent,
@@ -221,16 +251,20 @@ async function createChatContext(command: ChatCommand, deps: CliDeps): Promise<C
 		sessionStore,
 		stored,
 		sessionId,
-		messages: stored?.messages ?? [{ role: "system", content: agent.prompts.system }],
+		messages: chatMessages(stored, agent),
 		now: deps.now ?? Date.now,
+		createId: deps.createId ?? (() => crypto.randomUUID()),
+		...(memoryManager ? { memoryManager } : {}),
 	};
 }
 
 async function runChatTurn(context: ChatContext, prompt: string): Promise<{ answer: string; trace: NonNullable<Awaited<ReturnType<AgentRuntime["runSession"]>>["trace"]> }> {
+	const startMessageIndex = context.messages.length;
 	const session = createAgentSession({ id: context.sessionId, agent: context.agent, task: chatTask(context.command, prompt), messages: context.messages });
 	appendUserMessage(session, prompt);
 	const output = await context.runtime.runSession(session);
 	context.messages = session.messages;
+	await context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: memoryProjectId(context.command), messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId });
 	if (context.command.resumeSessionId || context.command.sessionId) {
 		const stored = storedSession(context.sessionId, context.agent, context.command, session.messages, context.stored, context.now());
 		await context.sessionStore.saveSession(stored);
@@ -239,16 +273,26 @@ async function runChatTurn(context: ChatContext, prompt: string): Promise<{ answ
 	return { answer: output.answer ?? "", trace: output.trace ?? [] };
 }
 
+function chatMessages(stored: StoredAgentSession | undefined, agent: AgentSpec): ModelMessage[] {
+	if (!stored) return [{ role: "system", content: agent.prompts.system }];
+	const messages = [...stored.messages];
+	if (messages[0]?.role === "system") return [{ ...messages[0], content: agent.prompts.system, contentBlocks: [{ type: "text", text: agent.prompts.system }] }, ...messages.slice(1)];
+	return [{ role: "system", content: agent.prompts.system }, ...messages];
+}
+
 function resolveChatCommand(command: ChatCommand, stored: StoredAgentSession | undefined): ResolvedChatCommand {
 	const sessionDir = resolveOptionalChatString(command, stored, "sessionDir");
+	const agentPath = resolveRequiredChatString(command, stored, "agentPath", "--agent");
 	return {
 		...command,
-		agentPath: resolveRequiredChatString(command, stored, "agentPath", "--agent"),
+		agentPath,
 		provider: resolveRequiredChatString(command, stored, "provider", "--provider"),
 		model: resolveRequiredChatString(command, stored, "model", "--model"),
 		baseURL: resolveRequiredChatString(command, stored, "baseURL", "--base-url"),
 		providerFormat: resolveProviderFormat(command, stored),
 		toolProfile: resolveToolProfile(command, stored),
+		providedFlags: { ...command.providedFlags, agentPath: command.providedFlags.agentPath || stored?.startupContext?.agentPath !== undefined || agentPath !== command.agentPath },
+		...(command.mcpServers ? { mcpServers: command.mcpServers } : {}),
 		...(sessionDir ? { sessionDir } : {}),
 	};
 }
@@ -286,31 +330,45 @@ function createChatInput(deps: CliDeps): { inputLines: AsyncIterable<string>; cl
 	return { inputLines: input, close: () => input.close() };
 }
 
-function createRunner(command: RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = []): BenchmarkRunner {
+async function createRunner(command: RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = []): Promise<BenchmarkRunner> {
 	return new BenchmarkRunner({
-		runtime: createRuntime(command, deps, subagents),
+		runtime: await createRuntime(command, deps, subagents),
 		grader: new MinimalTaskGrader(),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
 	});
 }
 
-function createRuntime(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = []): AgentRuntime {
-	const registry = createRegistry(command, deps);
-	registry.registerModel(command.provider, {
-		id: command.model,
-		providerId: command.provider,
-		format: command.providerFormat,
-	});
-	const createToolRegistryForAgent = () => deps.toolRegistry ?? createToolRegistryForProfile({ profile: command.toolProfile, workspaceRoot: deps.workspaceRoot ?? process.cwd(), ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}) });
+async function createRuntime(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = [], memoryManager?: MemoryManager, modelClient = createModelClient(command, deps)): Promise<AgentRuntime> {
+	const toolRegistry = await createCommandToolRegistry(command, deps);
+	registerMemoryTools(toolRegistry, command, deps, memoryManager);
 	return new AgentRuntime({
-		modelClient: registry.createClient(command.provider, command.model),
-		toolRegistry: createToolRegistryForAgent(),
-		createToolRegistryForAgent,
+		modelClient,
+		toolRegistry,
+		createToolRegistryForAgent: () => toolRegistryForAgent(toolRegistry, command, deps, memoryManager),
+		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectId(command), prompt: session.task.prompt, now: deps.now ?? Date.now }) } : {}),
 		...(subagents.length > 0 ? { subagents } : {}),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
 	});
+}
+
+async function createCommandToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): Promise<ToolRegistry> {
+	if (deps.toolRegistry) return deps.toolRegistry;
+	return createToolRegistryForProfileAsync({ profile: command.toolProfile, workspaceRoot: deps.workspaceRoot ?? process.cwd(), ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(command.mcpServers ? { mcpServers: command.mcpServers } : {}) });
+}
+
+function toolRegistryForAgent(baseRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, memoryManager?: MemoryManager): ToolRegistry {
+	const registry = deps.toolRegistry ?? baseRegistry.clone();
+	registerMemoryTools(registry, command, deps, memoryManager);
+	return registry;
+}
+
+function registerMemoryTools(toolRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, memoryManager?: MemoryManager): void {
+	if (!memoryManager || toolRegistry.get("memory_context")) return;
+	for (const tool of createMemoryTools({ manager: memoryManager, projectId: memoryProjectId(command), now: deps.now ?? Date.now, createId: deps.createId ?? (() => crypto.randomUUID()) })) {
+		toolRegistry.register(tool);
+	}
 }
 
 async function loadAgentBundle(agentPath: string): Promise<{ agent: AgentSpec; subagents: SubagentSpec[] }> {
@@ -320,7 +378,66 @@ async function loadAgentBundle(agentPath: string): Promise<{ agent: AgentSpec; s
 	return { agent, subagents: bundle.subagents };
 }
 
-function createRegistry(command: ModelsDiscoverCommand | ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): ModelRegistry {
+function mcpResult(command: "mcp.status" | "mcp.diagnostics", report: McpDiagnosticsReport, human: string): CliResult {
+	return { exitCode: report.ok ? 0 : 1, json: { ok: report.ok, command, summary: report.summary, servers: report.servers, diagnostics: report.diagnostics }, human };
+}
+
+function formatMcpStatusHuman(report: McpDiagnosticsReport): string {
+	if (report.summary.configured === 0) return "No MCP servers configured";
+	const summary = `MCP servers: ${report.summary.configured} configured, ${report.summary.enabled} enabled, ${report.summary.connected} connected, ${report.summary.failed} failed, ${report.summary.disabled} disabled`;
+	const rows = [["SERVER", "TYPE", "ENABLED", "POLICY", "STATE", "TOOLS", "RESOURCES", "ERROR"], ...report.servers.map((server) => [server.name, server.type, server.enabled ? "yes" : "no", server.failPolicy, server.state, String(server.toolCount), server.resourcesEnabled ? "yes" : "no", server.errorMessage ?? ""] )];
+	return [summary, "", formatTable(rows)].join("\n");
+}
+
+function formatMcpDiagnosticsHuman(report: McpDiagnosticsReport): string {
+	if (report.summary.configured === 0) return "No MCP servers configured";
+	return ["MCP diagnostics", "", ...report.servers.map(formatMcpServerDiagnosticHuman), ...(report.diagnostics.length > 0 ? ["", "Diagnostics:", ...report.diagnostics.map((diagnostic) => `- ${diagnostic}`)] : [])].join("\n");
+}
+
+function formatMcpServerDiagnosticHuman(server: McpServerDiagnostic): string {
+	const lines = [server.name, `  enabled: ${server.enabled ? "yes" : "no"}`, `  type: ${server.type}`, `  failPolicy: ${server.failPolicy}`, `  state: ${server.state}`, `  tools: ${server.toolCount}`, `  resources: ${server.resourcesEnabled ? "enabled" : "disabled"}`];
+	if (server.command) lines.push(`  command: ${server.command}`);
+	if (server.args?.length) lines.push(`  args: ${server.args.join(" ")}`);
+	if (server.cwd) lines.push(`  cwd: ${server.cwd}`);
+	if (server.url) lines.push(`  url: ${server.url}`);
+	if (server.timeoutMs) lines.push(`  timeoutMs: ${server.timeoutMs}`);
+	if (server.envKeys?.length) lines.push(`  envKeys: ${server.envKeys.join(", ")}`);
+	if (server.headerKeys?.length) lines.push(`  headerKeys: ${server.headerKeys.join(", ")}`);
+	if (server.errorMessage) lines.push(`  error: ${server.errorMessage}`);
+	for (const tool of server.tools ?? []) lines.push(`  - ${tool.name} -> ${tool.qualifiedName}`);
+	for (const resource of server.resources ?? []) lines.push(`  - resource ${resource.uri}${resource.name ? ` (${resource.name})` : ""}`);
+	return lines.join("\n");
+}
+
+function createMemoryManager(agent: AgentSpec, command: ResolvedChatCommand, modelClient: ModelClient): MemoryManager | undefined {
+	if (agent.runtime.memoryPolicy !== "long-term") return undefined;
+	return new MemoryManager(new JsonMemoryStore(path.join(chatStorageRoot(command), ".evolving-agent", "memory")), new LlmMemoryExtractor(modelClient, agent));
+}
+
+function memoryProjectId(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): string {
+	return command.kind === "chat" ? chatStorageRoot(command) : process.cwd();
+}
+
+function chatStorageRoot(command: ResolvedChatCommand): string {
+	if (!command.sessionDir) return process.cwd();
+	return isDefaultSessionDir(command.sessionDir) ? dirname(dirname(command.sessionDir)) : command.sessionDir;
+}
+
+function isDefaultSessionDir(sessionDir: string): boolean {
+	return path.basename(sessionDir) === "sessions" && path.basename(dirname(sessionDir)) === ".evolving-agent";
+}
+
+function createModelClient(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): ModelClient {
+	const registry = createModelRegistry(command, deps);
+	registry.registerModel(command.provider, {
+		id: command.model,
+		providerId: command.provider,
+		format: command.providerFormat,
+	});
+	return registry.createClient(command.provider, command.model);
+}
+
+function createModelRegistry(command: ModelsDiscoverCommand | ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): ModelRegistry {
 	const registry = new ModelRegistry({
 		...(deps.fetchFn ? { fetchFn: deps.fetchFn } : {}),
 		...(deps.openAIClientFactory ? { openAIClientFactory: deps.openAIClientFactory } : {}),
@@ -382,7 +499,13 @@ function effectiveAgent(agent: AgentSpec, provider: string, model: string): Agen
 			provider,
 			model,
 		},
+		tools: effectiveTools(agent),
 	};
+}
+
+function effectiveTools(agent: AgentSpec): AgentSpec["tools"] {
+	if (agent.runtime.memoryPolicy !== "long-term") return agent.tools;
+	return { ...agent.tools, allowedTools: [...new Set([...agent.tools.allowedTools, ...memoryToolNames])] };
 }
 
 function runJson(command: "run", result: AgentTaskRunResult): unknown {

@@ -68,6 +68,7 @@ export interface TaskExecutionOutput {
 
 export interface AgentRuntimeExecutor {
 	runTask(agent: AgentSpec, task: TaskSpec, signal?: AbortSignal): Promise<TaskExecutionOutput>;
+	close?(): Promise<void>;
 }
 
 export interface TaskGrader {

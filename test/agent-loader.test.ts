@@ -44,5 +44,8 @@ describe("agent loader", () => {
 
 	it("rejects invalid runtime policy", () => {
 		expect(() => validateAgentSpec({ ...agent, runtime: { maxTurns: 0 } })).toThrow("runtime.maxTurns");
+		expect(() => validateAgentSpec({ ...agent, runtime: { maxTurns: 1, timeoutMs: 0 } })).toThrow("runtime.timeoutMs");
+		expect(() => validateAgentSpec({ ...agent, runtime: { maxTurns: 1, contextCompression: "always" } })).toThrow("runtime.contextCompression");
+		expect(() => validateAgentSpec({ ...agent, runtime: { maxTurns: 1, memoryPolicy: "forever" } })).toThrow("runtime.memoryPolicy");
 	});
 });

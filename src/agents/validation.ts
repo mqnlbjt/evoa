@@ -30,6 +30,15 @@ export function validateAgentSpec(value: unknown): AgentSpec {
 	if (!Number.isInteger(agent.runtime.maxTurns) || agent.runtime.maxTurns < 1) {
 		throw new Error("runtime.maxTurns must be a positive integer");
 	}
+	if (agent.runtime.timeoutMs !== undefined && (!Number.isInteger(agent.runtime.timeoutMs) || agent.runtime.timeoutMs < 1)) {
+		throw new Error("runtime.timeoutMs must be a positive integer");
+	}
+	if (agent.runtime.contextCompression !== undefined && !["off", "auto"].includes(agent.runtime.contextCompression)) {
+		throw new Error("runtime.contextCompression must be off or auto");
+	}
+	if (agent.runtime.memoryPolicy !== undefined && !["none", "session", "long-term"].includes(agent.runtime.memoryPolicy)) {
+		throw new Error("runtime.memoryPolicy must be none, session, or long-term");
+	}
 
 	return agent as AgentSpec;
 }

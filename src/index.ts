@@ -38,5 +38,8 @@ export * from "./tasks/loader.js";
 export * from "./tasks/validation.js";
 export * from "./sessions/run-store.js";
 export * from "./sessions/jsonl-store.js";
+export * from "./sessions/session-store.js";
+export * from "./sessions/json-session-store.js";
+export * from "./tui/index.js";
 export * from "./agents/loader.js";
 export * from "./agents/validation.js";

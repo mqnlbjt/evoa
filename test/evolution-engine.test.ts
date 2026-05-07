@@ -26,7 +26,40 @@ const grader: TaskGrader = {
 	},
 };
 
+const memoryGrader: TaskGrader = {
+	async grade(_agent, _task, output) {
+		return {
+			score: 1,
+			maxScore: 1,
+			passed: true,
+			reason: "pass",
+			details: output.answer === "pass-memory-bad" ? { memory: { contaminationCount: 1, missingSourceRefs: 0, revokedCount: 0 } } : { memory: { contaminationCount: 0, missingSourceRefs: 0, revokedCount: 0 } },
+		};
+	},
+};
+
 describe("BenchmarkEvolutionEngine", () => {
+	it("downgrades improved candidates with memory regressions", async () => {
+		const engine = new BenchmarkEvolutionEngine({
+			baseline,
+			suite: { id: "suite", name: "Suite", tasks: [tasks[0]!] },
+			generator: { async generate() { return [{ id: "cand", kind: "prompt", parentAgentId: baseline.id, agent: candidate, description: "better" }]; } },
+			createRunner: () =>
+				new BenchmarkRunner({
+					runtime: new AnswerRuntime({ baseline: { a: "pass" }, candidate: { a: "pass-memory-bad" } }),
+					grader: memoryGrader,
+					createId: createIds(),
+					now: () => 1,
+				}),
+		});
+
+		const [generated] = await engine.generateCandidates();
+		const comparison = await engine.compare(generated!);
+
+		expect(comparison.metadata).toMatchObject({ memory: { issueDelta: 1 } });
+		expect(comparison.recommendation).toBe("needs-review");
+	});
+
 	it("accepts candidates that improve without regressions", async () => {
 		const engine = new BenchmarkEvolutionEngine({
 			baseline,

@@ -37,6 +37,16 @@ describe("verifyEvolutionComparison", () => {
 		expect(report.issues[0]).toMatchObject({ type: "timeout", severity: "blocking" });
 	});
 
+	it("reports memory regressions", () => {
+		const report = verifyEvolutionComparison(
+			suite(run("passed")),
+			suite({ ...run("passed"), score: { score: 1, maxScore: 1, passed: true, reason: "ok", details: { memory: { contaminationCount: 1, missingSourceRefs: 1, revokedCount: 0 } } } }),
+		);
+
+		expect(report.verdict).toBe("fail");
+		expect(report.issues[0]).toMatchObject({ type: "memory-regression", severity: "blocking" });
+	});
+
 	it("reports denied tool policy events", () => {
 		const report = verifyEvolutionComparison(
 			suite(run("failed")),
