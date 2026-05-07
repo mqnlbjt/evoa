@@ -2,6 +2,7 @@ import type { AgentSpec, TaskSpec } from "../specs.js";
 
 export type ModelContentBlock =
 	| { type: "text"; text: string }
+	| { type: "reasoning"; text: string }
 	| { type: "tool_call"; id: string; name: string; input?: unknown }
 	| { type: "tool_result"; toolCallId: string; toolName?: string; content: string; isError?: boolean };
 
@@ -33,9 +34,30 @@ export interface ModelRequest {
 	tools?: ModelToolDefinition[];
 }
 
+export interface ModelUsage {
+	inputTokens?: number;
+	outputTokens?: number;
+	reasoningTokens?: number;
+	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
+	totalTokens?: number;
+	costUsd?: number;
+}
+
+export interface ModelTiming {
+	startedAt: number;
+	endedAt: number;
+	durationMs: number;
+	ttftMs?: number;
+}
+
 export interface ModelResponse {
 	text?: string;
+	reasoning?: string;
 	toolCalls?: ModelToolCall[];
+	usage?: ModelUsage;
+	timing?: ModelTiming;
+	requestId?: string;
 	metadata?: Record<string, unknown>;
 }
 

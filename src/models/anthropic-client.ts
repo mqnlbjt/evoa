@@ -1,4 +1,4 @@
-import type { ModelClient, ModelContentBlock, ModelMessage, ModelRequest, ModelResponse, ModelToolCall, ModelToolDefinition } from "./types.js";
+import type { ModelClient, ModelContentBlock, ModelMessage, ModelRequest, ModelResponse, ModelToolCall, ModelToolDefinition, ModelUsage } from "./types.js";
 
 export interface AnthropicModelClientOptions {
 	apiKey?: string;
@@ -60,14 +60,17 @@ export class AnthropicModelClient implements ModelClient {
 
 		const data = body as AnthropicMessageResponse;
 		const toolCalls = parseToolCalls(data.content ?? []);
+		const usage = normalizeUsage(data.usage);
 		return {
 			text: data.content?.filter((block) => block.type === "text").map((block) => block.text ?? "").join("") ?? "",
 			...(toolCalls.length > 0 ? { toolCalls } : {}),
+			...(data.id ? { requestId: data.id } : {}),
+			...(usage ? { usage } : {}),
 			metadata: {
-				id: data.id,
-				model: data.model,
-				stopReason: data.stop_reason,
-				usage: data.usage,
+				...(data.id ? { id: data.id } : {}),
+				...(data.model ? { model: data.model } : {}),
+				...(data.stop_reason ? { stopReason: data.stop_reason } : {}),
+				...(data.usage ? { usage: data.usage } : {}),
 			},
 		};
 	}
@@ -135,6 +138,31 @@ function parseToolCalls(blocks: AnthropicContentBlock[]): ModelToolCall[] {
 
 function emptySchema(): Record<string, unknown> {
 	return { type: "object", properties: {}, additionalProperties: false };
+}
+
+function normalizeUsage(value: unknown): ModelUsage | undefined {
+	const usage = objectRecord(value);
+	const inputTokens = numberField(usage, "input_tokens");
+	const outputTokens = numberField(usage, "output_tokens");
+	const cacheReadTokens = numberField(usage, "cache_read_input_tokens");
+	const cacheWriteTokens = numberField(usage, "cache_creation_input_tokens");
+	if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens].every((item) => item === undefined)) return undefined;
+	return {
+		...(inputTokens === undefined ? {} : { inputTokens }),
+		...(outputTokens === undefined ? {} : { outputTokens }),
+		...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+		...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+		...((inputTokens ?? outputTokens ?? cacheReadTokens ?? cacheWriteTokens) === undefined ? {} : { totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0) }),
+	};
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function numberField(value: Record<string, unknown>, key: string): number | undefined {
+	const item = value[key];
+	return typeof item === "number" && Number.isFinite(item) ? item : undefined;
 }
 
 function numberOption(value: unknown): number | undefined {

@@ -38,6 +38,7 @@ describe("AnthropicModelClient", () => {
 						model: "gpt-5.4-mini",
 						stop_reason: "end_turn",
 						content: [{ type: "text", text: "hi" }],
+							usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 },
 					}),
 					{ status: 200, headers: { "content-type": "application/json" } },
 				);
@@ -55,7 +56,9 @@ describe("AnthropicModelClient", () => {
 		});
 
 		expect(response.text).toBe("hi");
-		expect(response.metadata).toMatchObject({ id: "msg_1", model: "gpt-5.4-mini", stopReason: "end_turn" });
+		expect(response.requestId).toBe("msg_1");
+		expect(response.usage).toEqual({ inputTokens: 12, outputTokens: 4, cacheReadTokens: 3, cacheWriteTokens: 2, totalTokens: 16 });
+		expect(response.metadata).toMatchObject({ id: "msg_1", model: "gpt-5.4-mini", stopReason: "end_turn", usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } });
 		expect(capturedUrl).toBe("http://localhost:8317/v1/messages");
 		expect(capturedInit?.headers).toMatchObject({ "x-api-key": "key", "anthropic-version": "2023-06-01" });
 		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
