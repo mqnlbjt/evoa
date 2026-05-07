@@ -66,7 +66,7 @@ describe("RoutingModelClient", () => {
 		};
 		const modelClient = new RoutingModelClient(new DeterministicModelRouter(), factory);
 		const routedAgent = withRouting({ aliases: { small: { provider: "openai", model: "small-model" } }, routes: { "memory-extraction": "small" } });
-		const originalRequest = request(routedAgent, "memory-extraction");
+		const originalRequest: ModelRequest = { ...request(routedAgent, "memory-extraction"), sessionId: "session-123", cacheRetention: "long" };
 
 		const first = await modelClient.complete(originalRequest);
 		const second = await modelClient.complete(originalRequest);
@@ -75,6 +75,7 @@ describe("RoutingModelClient", () => {
 		expect(second.metadata?.routing).toEqual({ purpose: "memory-extraction", alias: "small", provider: "openai", model: "small-model" });
 		expect(seenRequests).toHaveLength(2);
 		expect(seenRequests[0]?.agent.model).toEqual({ provider: "openai", model: "small-model" });
+			expect(seenRequests[0]).toMatchObject({ sessionId: "session-123", cacheRetention: "long" });
 		expect(originalRequest.agent.model).toEqual({ provider: "openai", model: "default-model" });
 		expect(createCount).toBe(1);
 	});

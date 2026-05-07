@@ -1,3 +1,4 @@
+import { anthropicCacheControl, resolveCacheRetention, type AnthropicCacheControl } from "./cache.js";
 import type { ModelClient, ModelContentBlock, ModelMessage, ModelRequest, ModelResponse, ModelToolCall, ModelToolDefinition, ModelUsage } from "./types.js";
 
 export interface AnthropicModelClientOptions {
@@ -38,7 +39,7 @@ export class AnthropicModelClient implements ModelClient {
 			throw new Error("Anthropic API key is required. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or pass apiKey.");
 		}
 
-		const requestBody = buildBody(request, this.options.maxTokens ?? numberOption(request.agent.model.options?.maxTokens) ?? 1024);
+		const requestBody = buildBody(request, this.options.maxTokens ?? numberOption(request.agent.model.options?.maxTokens) ?? 1024, this.options.baseURL);
 		const init: RequestInit = {
 			method: "POST",
 			headers: {
@@ -76,17 +77,36 @@ export class AnthropicModelClient implements ModelClient {
 	}
 }
 
-function buildBody(request: ModelRequest, maxTokens: number): Record<string, unknown> {
+function buildBody(request: ModelRequest, maxTokens: number, baseURL?: string): Record<string, unknown> {
+	const cacheControl = anthropicCacheControl(resolveCacheRetention(request), baseURL);
 	return {
 		model: request.agent.model.model,
 		max_tokens: maxTokens,
-		system: request.agent.prompts.system,
-		messages: request.messages.filter((message) => message.role !== "system").map(toAnthropicMessage),
-		...(request.tools?.length ? { tools: request.tools.map(toAnthropicTool) } : {}),
+		system: anthropicSystem(request.agent.prompts.system, cacheControl),
+		messages: toAnthropicMessages(request.messages, cacheControl),
+		...(request.tools?.length ? { tools: request.tools.map((tool, index) => toAnthropicTool(tool, index === request.tools!.length - 1 ? cacheControl : undefined)) } : {}),
 	};
 }
 
-function toAnthropicMessage(message: ModelMessage): Record<string, unknown> {
+function anthropicSystem(system: string, cacheControl: AnthropicCacheControl | undefined): string | Array<Record<string, unknown>> {
+	if (!cacheControl) return system;
+	return [{ type: "text", text: system, cache_control: cacheControl }];
+}
+
+function toAnthropicMessages(messages: ModelMessage[], cacheControl: AnthropicCacheControl | undefined): Record<string, unknown>[] {
+	const filtered = messages.filter((message) => message.role !== "system");
+	const cacheIndex = cacheControl ? lastUserMessageIndex(filtered) : -1;
+	return filtered.map((message, index) => toAnthropicMessage(message, index === cacheIndex ? cacheControl : undefined));
+}
+
+function lastUserMessageIndex(messages: ModelMessage[]): number {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		if (messages[index]?.role === "user") return index;
+	}
+	return -1;
+}
+
+function toAnthropicMessage(message: ModelMessage, cacheControl?: AnthropicCacheControl): Record<string, unknown> {
 	if (message.role === "tool") {
 		const result = message.contentBlocks?.find((block): block is Extract<ModelContentBlock, { type: "tool_result" }> => block.type === "tool_result");
 		return {
@@ -115,14 +135,15 @@ function toAnthropicMessage(message: ModelMessage): Record<string, unknown> {
 			],
 		};
 	}
-	return { role: message.role === "assistant" ? "assistant" : "user", content: message.content };
+	return { role: message.role === "assistant" ? "assistant" : "user", content: cacheControl ? [{ type: "text", text: message.content, cache_control: cacheControl }] : message.content };
 }
 
-function toAnthropicTool(tool: ModelToolDefinition): Record<string, unknown> {
+function toAnthropicTool(tool: ModelToolDefinition, cacheControl?: AnthropicCacheControl): Record<string, unknown> {
 	return {
 		name: tool.name,
 		description: tool.description,
 		input_schema: tool.inputSchema ?? emptySchema(),
+		...(cacheControl ? { cache_control: cacheControl } : {}),
 	};
 }
 
@@ -146,12 +167,14 @@ function normalizeUsage(value: unknown): ModelUsage | undefined {
 	const outputTokens = numberField(usage, "output_tokens");
 	const cacheReadTokens = numberField(usage, "cache_read_input_tokens");
 	const cacheWriteTokens = numberField(usage, "cache_creation_input_tokens");
-	if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens].every((item) => item === undefined)) return undefined;
+	const reasoningTokens = numberField(objectRecord(usage.output_tokens_details), "reasoning_tokens") ?? numberField(objectRecord(usage.completion_tokens_details), "reasoning_tokens") ?? numberField(usage, "reasoning_tokens");
+	if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens].every((item) => item === undefined)) return undefined;
 	return {
 		...(inputTokens === undefined ? {} : { inputTokens }),
 		...(outputTokens === undefined ? {} : { outputTokens }),
 		...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
 		...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+		...(reasoningTokens === undefined ? {} : { reasoningTokens }),
 		...((inputTokens ?? outputTokens ?? cacheReadTokens ?? cacheWriteTokens) === undefined ? {} : { totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0) }),
 	};
 }

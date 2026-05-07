@@ -25,6 +25,14 @@ describe("renderTui", () => {
 		expect(output.endsWith("\n")).toBe(false);
 	});
 
+	it("updates the header to the routed model after model response", () => {
+		const state = createState();
+		state.applyTraceEvent({ id: "response", type: "model_response", timestamp: 1, agentId: "agent", taskId: "task", payload: { text: "hi", metadata: { routing: { provider: "oai", model: "mimo-v2.5-pro" } } } });
+		const output = renderTui(state.snapshot(), new InputEditor(), { width: 100, height: 20, now: 2 });
+		expect(output).toContain("model: oai/mimo-v2.5-pro");
+		expect(output).not.toContain("model: provider/model");
+	});
+
 	it("colors user assistant and tool log prefixes", () => {
 		const state = createState();
 		state.addUserMessage("hello");

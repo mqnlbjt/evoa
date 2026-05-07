@@ -9,9 +9,9 @@ describe("slash commands", () => {
 	it("handles help clear status tools memory trace and exit", async () => {
 		const state = new TuiState({ agentName: "Agent", agentId: "agent", model: "model", provider: "provider", toolProfile: "coding", cwd: ".", sessionId: "session" });
 		state.addUserMessage("hello");
-		const context = { state, chat: fakeChat(), stop: () => { stopped = true; } };
+		const context = { state, chat: fakeChat(), stop: () => { stopped = true; }, newSession: async () => "new-session" };
 		let stopped = false;
-		expect((await handleSlashCommand("/help", context)).message).toContain("/status");
+		expect((await handleSlashCommand("/help", context)).message).toContain("/new");
 		expect((await handleSlashCommand("/status", context)).message).toContain("session");
 		expect((await handleSlashCommand("/tools", context)).message).toContain("echo");
 		expect((await handleSlashCommand("/memory", context)).message).toContain("disabled");
@@ -24,6 +24,8 @@ describe("slash commands", () => {
 		expect(state.snapshot().activeView).toBe("chat");
 		await handleSlashCommand("/clear", context);
 		expect(state.snapshot().log.at(-1)?.text).toBe("Cleared");
+		await handleSlashCommand("/new", context);
+		expect(state.snapshot().log.at(-1)?.text).toBe("Started new session: new-session");
 		const exit = await handleSlashCommand("/exit", context);
 		expect(exit.exit).toBe(true);
 		expect(stopped).toBe(true);

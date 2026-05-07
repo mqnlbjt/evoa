@@ -12,7 +12,7 @@ export class TuiState {
 	private readonly log: ChatLogEntry[] = [];
 	private readonly runningTools = new Map<string, RunningToolEntry>();
 	private readonly trace: TraceEvent[] = [];
-	private readonly stats = new TuiStatsAccumulator();
+	private stats = new TuiStatsAccumulator();
 	private status: TuiStatus = "idle";
 	private activeView: TuiView = "chat";
 	private turnCount = 0;
@@ -26,10 +26,14 @@ export class TuiState {
 	private skillDurationMs = 0;
 	private readonly now: () => number;
 	private readonly createId: () => string;
+	private currentModel: string;
+	private currentProvider: string;
 
-	constructor(private readonly options: TuiStateOptions) {
+	constructor(private options: TuiStateOptions) {
 		this.now = options.now ?? Date.now;
 		this.createId = options.createId ?? (() => crypto.randomUUID());
+		this.currentModel = options.model;
+		this.currentProvider = options.provider;
 	}
 
 	snapshot(): TuiStateSnapshot {
@@ -37,8 +41,8 @@ export class TuiState {
 		return {
 			agentName: this.options.agentName,
 			agentId: this.options.agentId,
-			model: this.options.model,
-			provider: this.options.provider,
+			model: this.currentModel,
+			provider: this.currentProvider,
 			toolProfile: this.options.toolProfile,
 			cwd: this.options.cwd,
 			sessionId: this.options.sessionId,
@@ -59,6 +63,27 @@ export class TuiState {
 			runningTools: Array.from(this.runningTools.values()),
 			trace: [...this.trace],
 		};
+	}
+
+	reset(options: TuiStateOptions): void {
+		this.options = options;
+		this.currentModel = options.model;
+		this.currentProvider = options.provider;
+		this.log.length = 0;
+		this.runningTools.clear();
+		this.trace.length = 0;
+		this.stats = new TuiStatsAccumulator();
+		this.status = "idle";
+		this.activeView = "chat";
+		this.turnCount = 0;
+		this.toolCallCount = 0;
+		this.lastError = undefined;
+		this.streamingAssistantLogId = undefined;
+		this.runStartedAt = undefined;
+		this.runDurationMs = undefined;
+		this.toolDurationMs = 0;
+		this.mcpDurationMs = 0;
+		this.skillDurationMs = 0;
 	}
 
 	addUserMessage(text: string): void {
@@ -134,9 +159,18 @@ export class TuiState {
 
 	private applyModelResponse(event: TraceEvent): void {
 		const response = event.payload as ModelResponse;
+		this.applyModelRouting(response);
 		if (response.text) this.upsertAssistantResponse(response.text);
 		this.streamingAssistantLogId = undefined;
 		if (this.runningTools.size === 0) this.status = "idle";
+	}
+
+	private applyModelRouting(response: ModelResponse): void {
+		const routing = objectRecord(response.metadata?.routing);
+		const model = stringField(routing, "model");
+		const provider = stringField(routing, "provider");
+		if (model) this.currentModel = model;
+		if (provider) this.currentProvider = provider;
 	}
 
 	private applyToolCall(event: TraceEvent): void {
@@ -218,9 +252,18 @@ function summarizePayload(payload: unknown): string {
 }
 
 function errorMessage(payload: unknown): string {
-	const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+	const record = objectRecord(payload);
 	const message = record.message;
 	return typeof message === "string" ? message : summarizePayload(payload);
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringField(value: Record<string, unknown>, key: string): string | undefined {
+	const field = value[key];
+	return typeof field === "string" && field.length > 0 ? field : undefined;
 }
 
 function extractDeltaText(payload: unknown): string {

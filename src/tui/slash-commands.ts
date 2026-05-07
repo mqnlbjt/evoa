@@ -7,6 +7,7 @@ export interface SlashCommandContext {
 	state: TuiState;
 	chat: ChatServiceContext;
 	stop: () => void;
+	newSession?: () => Promise<string>;
 }
 
 export interface SlashCommandResult {
@@ -22,6 +23,12 @@ export async function handleSlashCommand(input: string, context: SlashCommandCon
 	if (name === "/clear") {
 		context.state.clearLog();
 		context.state.addSystemMessage("Cleared");
+		return { handled: true };
+	}
+	if (name === "/new") {
+		if (!context.newSession) return message("New session is unavailable");
+		const sessionId = await context.newSession();
+		context.state.addSystemMessage(`Started new session: ${sessionId}`);
 		return { handled: true };
 	}
 	if (name === "/exit" || name === "/quit") {
@@ -51,6 +58,7 @@ function helpText(): string {
 	return [
 		"/help    Show commands",
 		"/clear   Clear chat log",
+		"/new     Start a new session",
 		"/exit    Exit TUI",
 		"/status  Show session/runtime status",
 		"/stats   Show stats page",

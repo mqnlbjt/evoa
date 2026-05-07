@@ -25,8 +25,10 @@ const task: TaskSpec = {
 
 describe("AgentRuntime", () => {
 	it("runs a model request and returns the model text", async () => {
+		let seenSessionId: string | undefined;
 		const modelClient: ModelClient = {
-			async complete() {
+			async complete(request) {
+				seenSessionId = request.sessionId;
 				return { text: "hi" };
 			},
 		};
@@ -35,6 +37,7 @@ describe("AgentRuntime", () => {
 		const output = await runtime.runTask(agent, task);
 
 		expect(output.answer).toBe("hi");
+		expect(seenSessionId).toBe("id-1");
 		expect(output.trace?.map((event) => event.type)).toEqual(["model_request", "model_response"]);
 		expect(output.trace?.[0]?.payload).toMatchObject({ purpose: "main" });
 	});

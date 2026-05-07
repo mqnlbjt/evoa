@@ -1,6 +1,7 @@
 import type { AgentSpec, TaskSpec } from "../specs.js";
 
 export type ModelPurpose = "main" | "memory-extraction" | "summary" | "compaction" | "verification" | "evolution" | "coding" | "tool-heavy";
+export type CacheRetention = "none" | "short" | "long";
 
 export interface ModelRoutingHints {
 	inputTokenEstimate?: number;
@@ -43,6 +44,8 @@ export interface ModelRequest {
 	turn: number;
 	purpose?: ModelPurpose;
 	routing?: ModelRoutingHints;
+	sessionId?: string;
+	cacheRetention?: CacheRetention;
 	tools?: ModelToolDefinition[];
 }
 

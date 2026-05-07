@@ -87,6 +87,18 @@ describe("TuiState", () => {
 		expect(state.snapshot().stats.model.requestCount).toBe(1);
 	});
 
+	it("resets state for a new session", () => {
+		const state = new TuiState(base);
+		state.addUserMessage("old");
+		state.setView("stats");
+		state.applyTraceEvent(event("model_request", { turn: 1 }));
+		state.reset({ ...base, sessionId: "new-session" });
+		expect(state.snapshot()).toMatchObject({ sessionId: "new-session", activeView: "chat", status: "idle", turnCount: 0 });
+		expect(state.snapshot().log).toHaveLength(0);
+		expect(state.snapshot().trace).toHaveLength(0);
+		expect(state.snapshot().stats.model.requestCount).toBe(0);
+	});
+
 	it("switches active view", () => {
 		const state = new TuiState(base);
 		expect(state.snapshot().activeView).toBe("chat");

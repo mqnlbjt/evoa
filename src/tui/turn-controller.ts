@@ -10,6 +10,7 @@ export interface TuiTurnControllerOptions {
 	onRenderRequested: () => void;
 	onStopRequested: () => void;
 	onViewChanged: (view: TuiView) => void;
+	onNewSessionRequested?: () => Promise<string>;
 }
 
 export class TuiTurnController {
@@ -40,19 +41,27 @@ export class TuiTurnController {
 	}
 
 	private async submitSlashCommand(input: string): Promise<void> {
+		if (isNewSessionCommand(input) && this.busy) {
+			this.showBusyNotice();
+			return;
+		}
 		const beforeView = this.options.state.snapshot().activeView;
-		const result = await handleSlashCommand(input, { state: this.options.state, chat: this.options.chat, stop: this.options.onStopRequested });
+		const result = await handleSlashCommand(input, { state: this.options.state, chat: this.options.chat, stop: this.options.onStopRequested, ...(this.options.onNewSessionRequested ? { newSession: this.options.onNewSessionRequested } : {}) });
 		const afterView = this.options.state.snapshot().activeView;
 		if (beforeView !== afterView) this.options.onViewChanged(afterView);
 		if (result.message) this.options.state.addSystemMessage(result.message);
 		this.options.onRenderRequested();
 	}
 
+	private showBusyNotice(): void {
+		if (!this.busyNoticeShown) this.options.state.addSystemMessage("A turn is already running");
+		this.busyNoticeShown = true;
+		this.options.onRenderRequested();
+	}
+
 	private async submitTurn(input: string): Promise<void> {
 		if (this.busy) {
-			if (!this.busyNoticeShown) this.options.state.addSystemMessage("A turn is already running");
-			this.busyNoticeShown = true;
-			this.options.onRenderRequested();
+			this.showBusyNotice();
 			return;
 		}
 		this.busy = true;
@@ -71,4 +80,8 @@ export class TuiTurnController {
 			this.options.onRenderRequested();
 		}
 	}
+}
+
+function isNewSessionCommand(input: string): boolean {
+	return input.trim().split(/\s+/, 1)[0] === "/new";
 }

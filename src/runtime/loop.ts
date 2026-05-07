@@ -37,6 +37,7 @@ export async function runAgentLoop(
 			messages: requestMessages,
 			turn: session.turnCount,
 			purpose,
+			sessionId: session.id,
 			...(tools.length > 0 ? { tools } : {}),
 		};
 

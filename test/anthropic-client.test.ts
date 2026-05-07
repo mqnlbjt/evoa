@@ -38,7 +38,7 @@ describe("AnthropicModelClient", () => {
 						model: "gpt-5.4-mini",
 						stop_reason: "end_turn",
 						content: [{ type: "text", text: "hi" }],
-							usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 },
+						usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 },
 					}),
 					{ status: 200, headers: { "content-type": "application/json" } },
 				);
@@ -64,8 +64,8 @@ describe("AnthropicModelClient", () => {
 		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
 			model: "gpt-5.4-mini",
 			max_tokens: 64,
-			system: "You are concise.",
-			messages: [{ role: "user", content: "Say hi" }],
+			system: [{ type: "text", text: "You are concise.", cache_control: { type: "ephemeral" } }],
+			messages: [{ role: "user", content: [{ type: "text", text: "Say hi", cache_control: { type: "ephemeral" } }] }],
 		});
 	});
 
@@ -92,9 +92,9 @@ describe("AnthropicModelClient", () => {
 		});
 
 		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
-			tools: [{ name: "read_file", description: "Read file", input_schema: { type: "object" } }],
+			tools: [{ name: "read_file", description: "Read file", input_schema: { type: "object" }, cache_control: { type: "ephemeral" } }],
 			messages: [
-				{ role: "user", content: "Say hi" },
+				{ role: "user", content: [{ type: "text", text: "Say hi", cache_control: { type: "ephemeral" } }] },
 				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "{\"content\":\"ok\"}" }] },
 			],
 		});
@@ -130,7 +130,7 @@ describe("AnthropicModelClient", () => {
 
 		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
 			messages: [
-				{ role: "user", content: "Say hi" },
+				{ role: "user", content: [{ type: "text", text: "Say hi", cache_control: { type: "ephemeral" } }] },
 				{
 					role: "assistant",
 					content: [
@@ -141,6 +141,58 @@ describe("AnthropicModelClient", () => {
 				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "{\"content\":\"ok\"}" }] },
 			],
 		});
+	});
+
+	it("omits cache markers when cache retention is none", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({
+			agent: { ...agent, model: { ...agent.model, options: { cacheRetention: "none" } } },
+			task,
+			turn: 1,
+			messages: [{ role: "user", content: task.prompt }],
+			tools: [{ name: "read_file", description: "Read file", inputSchema: { type: "object" } }],
+		});
+
+		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
+			system: "You are concise.",
+			tools: [{ name: "read_file", description: "Read file", input_schema: { type: "object" } }],
+			messages: [{ role: "user", content: "Say hi" }],
+		});
+	});
+
+	it("uses one hour cache ttl only for official Anthropic base URLs", async () => {
+		const bodies: unknown[] = [];
+		const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {
+			bodies.push(JSON.parse(String(init?.body)));
+			return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+		};
+		const longAgent = { ...agent, model: { ...agent.model, options: { cacheRetention: "long" } } };
+
+		await new AnthropicModelClient({ apiKey: "key", baseURL: "https://api.anthropic.com/v1", fetchFn }).complete({ agent: longAgent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+		await new AnthropicModelClient({ apiKey: "key", baseURL: "http://localhost:8317/v1", fetchFn }).complete({ agent: longAgent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(bodies[0]).toMatchObject({ system: [{ cache_control: { type: "ephemeral", ttl: "1h" } }] });
+		expect(bodies[1]).toMatchObject({ system: [{ cache_control: { type: "ephemeral" } }] });
+		expect((bodies[1] as { system: Array<{ cache_control: { ttl?: string } }> }).system[0]?.cache_control.ttl).toBeUndefined();
+	});
+
+	it("parses reasoning usage tokens", async () => {
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async () => new Response(JSON.stringify({ content: [{ type: "text", text: "done" }], usage: { input_tokens: 10, output_tokens: 4, output_tokens_details: { reasoning_tokens: 3 } } }), { status: 200 }),
+		});
+
+		const response = await client.complete({ agent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(response.usage).toEqual({ inputTokens: 10, outputTokens: 4, reasoningTokens: 3, totalTokens: 14 });
 	});
 
 	it("parses tool_use blocks into tool calls", async () => {

@@ -84,6 +84,16 @@ export async function createChatServiceContext(command: ChatCommand | TuiCommand
 	};
 }
 
+export function startNewChatSession(context: ChatServiceContext): string {
+	const sessionId = context.createId();
+	context.sessionId = sessionId;
+	context.messages = chatMessages(undefined, context.agent);
+	context.stored = undefined;
+	if (context.command.sessionId || context.command.resumeSessionId) context.command.sessionId = sessionId;
+	delete context.command.resumeSessionId;
+	return sessionId;
+}
+
 export async function runChatTurn(context: ChatServiceContext, prompt: string): Promise<ChatTurnOutput> {
 	const startMessageIndex = context.messages.length;
 	const session = createAgentSession({ id: context.sessionId, agent: context.agent, task: chatTask(context.command, prompt), messages: context.messages });

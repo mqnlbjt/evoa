@@ -44,7 +44,7 @@ describe("OpenAIModelClient", () => {
 			],
 		});
 
-		expect(response).toEqual({ text: "hi", requestId: "req_123", usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13, reasoningTokens: 2, cacheReadTokens: 4 }, metadata: { requestId: "req_123", usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13, output_tokens_details: { reasoning_tokens: 2 }, input_tokens_details: { cached_tokens: 4 } } } });
+		expect(response).toEqual({ text: "hi", requestId: "req_123", usage: { inputTokens: 6, outputTokens: 3, totalTokens: 13, reasoningTokens: 2, cacheReadTokens: 4 }, metadata: { requestId: "req_123", usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13, output_tokens_details: { reasoning_tokens: 2 }, input_tokens_details: { cached_tokens: 4 } } } });
 		expect(captured).toMatchObject({
 			model: "gpt-4.1-mini",
 			instructions: "You are concise.",
@@ -249,4 +249,144 @@ describe("OpenAIModelClient", () => {
 
 		expect(response.toolCalls).toEqual([{ id: "call_1", name: "read_file", input: { path: "README.md" } }]);
 	});
+
+
+	it("handles OpenAI-compatible non-array output payloads", async () => {
+		const client: OpenAIResponsesClient = {
+			responses: {
+				async create() {
+					return {
+						output: { type: "message", content: [{ type: "output_text", text: "hi" }] },
+					};
+				},
+			},
+		};
+
+		const response = await new OpenAIModelClient({ client }).complete({
+			agent,
+			task,
+			turn: 1,
+			messages: [{ role: "user", content: task.prompt }],
+		});
+
+		expect(response.text).toBe("hi");
+	});
+
+
+	it("uses direct fetch for default OpenAI client to avoid SDK response parsing", async () => {
+		let capturedUrl = "";
+		let capturedInit: RequestInit | undefined;
+		const modelClient = new OpenAIModelClient({
+			apiKey: "key",
+			baseURL: "http://localhost:1234/v1",
+			fetchFn: async (input, init) => {
+				capturedUrl = String(input);
+				capturedInit = init;
+				return new Response(JSON.stringify({ output: { type: "message", content: [{ type: "output_text", text: "hi" }] } }), { status: 200, headers: { "content-type": "application/json" } });
+			},
+		});
+
+		const response = await modelClient.complete({
+			agent,
+			task,
+			turn: 1,
+			messages: [{ role: "user", content: task.prompt }],
+		});
+
+		expect(response.text).toBe("hi");
+		expect(capturedUrl).toBe("http://localhost:1234/v1/responses");
+		expect(capturedInit?.headers).toMatchObject({ authorization: "Bearer key" });
+	});
+
+
+	it("falls back to output content when output_text is empty", async () => {
+		const client: OpenAIResponsesClient = {
+			responses: {
+				async create() {
+					return { output_text: "", output: [{ type: "message", content: [{ type: "output_text", text: "hi from output" }] }] };
+				},
+			},
+		};
+
+		const response = await new OpenAIModelClient({ client }).complete({ agent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(response.text).toBe("hi from output");
+	});
+
+	it("parses array chat choice content", async () => {
+		const client: OpenAIResponsesClient = {
+			responses: {
+				async create() {
+					return { choices: [{ message: { content: [{ type: "text", text: "hi from choice" }] } }] };
+				},
+			},
+		};
+
+		const response = await new OpenAIModelClient({ client }).complete({ agent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(response.text).toBe("hi from choice");
+	});
+
+	it("sends prompt cache key when session id is available", async () => {
+		let captured: unknown;
+		const client: OpenAIResponsesClient = {
+			responses: {
+				async create(params) {
+					captured = params;
+					return { output_text: "hi" };
+				},
+			},
+		};
+
+		await new OpenAIModelClient({ client }).complete({
+			agent,
+			task,
+			turn: 1,
+			sessionId: "session-123",
+			messages: [{ role: "user", content: task.prompt }],
+		});
+
+		expect(captured).toMatchObject({ prompt_cache_key: "session-123" });
+		expect(captured).not.toMatchObject({ prompt_cache_retention: expect.anything() });
+	});
+
+	it("omits prompt cache params when cache retention is none or session id is absent", async () => {
+		const captured: unknown[] = [];
+		const client: OpenAIResponsesClient = {
+			responses: {
+				async create(params) {
+					captured.push(params);
+					return { output_text: "hi" };
+				},
+			},
+		};
+		const noneAgent = { ...agent, model: { ...agent.model, options: { cacheRetention: "none" } } };
+
+		await new OpenAIModelClient({ client }).complete({ agent: noneAgent, task, turn: 1, sessionId: "session-123", messages: [{ role: "user", content: task.prompt }] });
+		await new OpenAIModelClient({ client }).complete({ agent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(captured[0]).not.toMatchObject({ prompt_cache_key: expect.anything() });
+		expect(captured[1]).not.toMatchObject({ prompt_cache_key: expect.anything() });
+	});
+
+	it("uses long prompt cache retention only for official OpenAI base URLs", async () => {
+		const captured: unknown[] = [];
+		const client: OpenAIResponsesClient = {
+			responses: {
+				async create(params) {
+					captured.push(params);
+					return { output_text: "hi" };
+				},
+			},
+		};
+		const longAgent = { ...agent, model: { ...agent.model, options: { cacheRetention: "long" } } };
+
+		await new OpenAIModelClient({ client, baseURL: "https://api.openai.com/v1" }).complete({ agent: longAgent, task, turn: 1, sessionId: "session-123", messages: [{ role: "user", content: task.prompt }] });
+		await new OpenAIModelClient({ client, baseURL: "http://localhost:1234/v1" }).complete({ agent: longAgent, task, turn: 1, sessionId: "session-123", messages: [{ role: "user", content: task.prompt }] });
+
+		expect(captured[0]).toMatchObject({ prompt_cache_key: "session-123", prompt_cache_retention: "24h" });
+		expect(captured[1]).toMatchObject({ prompt_cache_key: "session-123" });
+		expect(captured[1]).not.toMatchObject({ prompt_cache_retention: expect.anything() });
+	});
+
 });

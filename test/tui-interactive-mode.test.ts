@@ -290,6 +290,34 @@ describe("InteractiveMode", () => {
 		await expect(exit).resolves.toBe(0);
 	});
 
+	it("starts a new session with /new", async () => {
+		const terminal = new FakeTerminal();
+		const mode = new InteractiveMode({
+			terminal,
+			command: { kind: "tui", format: "human", agentPath: noMemoryAgentPath, provider: "local", model: "gpt-5.5", baseURL: "http://localhost:8317/v1", providerFormat: "openai-responses", toolProfile: "dangerous", providedFlags: { agentPath: true, provider: true, model: true, baseURL: true } },
+			deps: { openAIClientFactory: () => fakeQueuedOpenAIClient(["one", "two"]), now: () => 1, createId: nextId() },
+			now: () => 1,
+		});
+		const exit = mode.start();
+		await waitFor(() => terminal.outputText().includes("evolving-agent"));
+		terminal.emitInput("alpha");
+		terminal.emitInput("\n");
+		await waitFor(() => frameText(terminal).includes("┃ LLM  one"));
+		terminal.emitInput("/new");
+		terminal.emitInput("\n");
+		await waitFor(() => frameText(terminal).includes("Started new session: id-"));
+		expect(frameText(terminal)).not.toContain("alpha");
+		expect(frameText(terminal)).not.toContain("one");
+		terminal.emitInput("beta");
+		terminal.emitInput("\n");
+		await waitFor(() => frameText(terminal).includes("┃ LLM  two"));
+		expect(frameText(terminal)).toContain("┃ You  beta");
+		expect(frameText(terminal)).not.toContain("alpha");
+		terminal.emitInput("/exit");
+		terminal.emitInput("\n");
+		await expect(exit).resolves.toBe(0);
+	});
+
 	it("renders tools, memory, stats, and trace pages", async () => {
 		const terminal = new FakeTerminal({ width: 120, height: 40 });
 		const mode = new InteractiveMode({

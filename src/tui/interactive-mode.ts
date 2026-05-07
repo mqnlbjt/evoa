@@ -1,9 +1,9 @@
 import type { ChatCommand, TuiCommand } from "../cli/args.js";
-import type { ChatServiceDeps } from "../cli/chat-service.js";
+import { startNewChatSession, type ChatServiceDeps } from "../cli/chat-service.js";
 import { InputEditor } from "./input-editor.js";
 import { TuiRenderScheduler } from "./render-scheduler.js";
 import type { Terminal } from "./terminal.js";
-import { createTuiSession } from "./tui-session.js";
+import { createTuiSession, resetTuiStateForChat } from "./tui-session.js";
 import type { TuiStateSnapshot } from "./types.js";
 import { TuiTurnController } from "./turn-controller.js";
 import { TuiViewportController } from "./viewport-controller.js";
@@ -47,6 +47,12 @@ export class InteractiveMode {
 				onRenderRequested: () => this.renderScheduler?.request(),
 				onStopRequested: () => this.stop(),
 				onViewChanged: (view) => this.viewport.reset(view),
+				onNewSessionRequested: async () => {
+					const sessionId = startNewChatSession(session.chat);
+					resetTuiStateForChat(session.state, session.chat, { command: this.options.command, deps: this.options.deps, ...(this.options.now ? { now: this.options.now } : {}), onTraceEvent: () => this.renderScheduler?.request() });
+					this.viewport.reset("chat");
+					return sessionId;
+				},
 			});
 			this.unsubscribers = [
 				terminal.onInput((chunk) => { void this.handleInput(chunk, session.state.snapshot()); }),
