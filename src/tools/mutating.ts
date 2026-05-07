@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { lstat, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createHostBashExecutor, type BashExecutor } from "./bash-executor.js";
 import type { EvolvingAgentTool } from "./types.js";
 import { ToolRegistry } from "./registry.js";
 import { objectInput, optionalBooleanField, optionalNumberField, optionalStringField, readTextFile, relativePath, resolveCreatableInsideRoot, resolveExistingInsideRoot, stringField, throwIfAborted } from "./workspace.js";
@@ -12,6 +12,7 @@ export interface MutatingToolOptions {
 	bashTimeoutMs?: number;
 	bashMaxTimeoutMs?: number;
 	bashMaxOutputBytes?: number;
+	bashExecutor?: BashExecutor;
 }
 
 interface ResolvedOptions {
@@ -21,6 +22,7 @@ interface ResolvedOptions {
 	bashTimeoutMs: number;
 	bashMaxTimeoutMs: number;
 	bashMaxOutputBytes: number;
+	bashExecutor: BashExecutor;
 }
 
 interface EditSpec {
@@ -167,7 +169,7 @@ function bashTool(options: ResolvedOptions): EvolvingAgentTool {
 			if (!info.isDirectory()) throw new Error("cwd is not a directory");
 			const timeoutMs = Math.min(optionalNumberField(parsed, "timeoutMs") ?? options.bashTimeoutMs, options.bashMaxTimeoutMs);
 			if (timeoutMs <= 0) throw new Error("timeoutMs must be greater than 0");
-			return runBash({ command, cwd, workspaceRoot: options.workspaceRoot, timeoutMs, maxOutputBytes: options.bashMaxOutputBytes, ...(signal ? { signal } : {}) });
+			return options.bashExecutor.execute({ command, cwd, workspaceRoot: options.workspaceRoot, timeoutMs, maxOutputBytes: options.bashMaxOutputBytes, ...(signal ? { signal } : {}) });
 		},
 	};
 }
@@ -180,6 +182,7 @@ function resolveOptions(options: MutatingToolOptions): ResolvedOptions {
 		bashTimeoutMs: options.bashTimeoutMs ?? 10_000,
 		bashMaxTimeoutMs: options.bashMaxTimeoutMs ?? 60_000,
 		bashMaxOutputBytes: options.bashMaxOutputBytes ?? 64 * 1024,
+		bashExecutor: options.bashExecutor ?? createHostBashExecutor(),
 	};
 }
 
@@ -228,74 +231,6 @@ async function withPathQueue<T>(target: string, operation: () => Promise<T>): Pr
 	}
 }
 
-interface BashRunOptions {
-	command: string;
-	cwd: string;
-	workspaceRoot: string;
-	timeoutMs: number;
-	maxOutputBytes: number;
-	signal?: AbortSignal;
-}
-
-async function runBash(options: BashRunOptions): Promise<unknown> {
-	return new Promise((resolve, reject) => {
-		const startedAt = Date.now();
-		let stdout = "";
-		let stderr = "";
-		let outputBytes = 0;
-		let truncated = false;
-		let timedOut = false;
-		let settled = false;
-		const child = spawn(options.command, { cwd: options.cwd, shell: true });
-		const timeout = setTimeout(() => {
-			timedOut = true;
-			child.kill("SIGTERM");
-		}, options.timeoutMs);
-		const abort = () => child.kill("SIGTERM");
-		if (options.signal?.aborted) abort();
-		else options.signal?.addEventListener("abort", abort, { once: true });
-
-		child.stdout.on("data", (chunk: Buffer) => {
-			stdout += appendOutput(chunk, options.maxOutputBytes, () => outputBytes, (bytes) => { outputBytes = bytes; }, () => { truncated = true; child.kill("SIGTERM"); });
-		});
-		child.stderr.on("data", (chunk: Buffer) => {
-			stderr += appendOutput(chunk, options.maxOutputBytes, () => outputBytes, (bytes) => { outputBytes = bytes; }, () => { truncated = true; child.kill("SIGTERM"); });
-		});
-		child.on("error", (error) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			options.signal?.removeEventListener("abort", abort);
-			reject(error);
-		});
-		child.on("close", (exitCode, signal) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			options.signal?.removeEventListener("abort", abort);
-			resolve({
-				command: options.command,
-				cwd: relativePath(options.workspaceRoot, options.cwd),
-				exitCode,
-				signal,
-				stdout,
-				stderr,
-				truncated,
-				timedOut,
-				durationMs: Date.now() - startedAt,
-			});
-		});
-	});
-}
-
-function appendOutput(chunk: Buffer, maxBytes: number, currentBytes: () => number, setBytes: (bytes: number) => void, onLimit: () => void): string {
-	if (currentBytes() >= maxBytes) return "";
-	const remaining = maxBytes - currentBytes();
-	const piece = chunk.subarray(0, remaining);
-	setBytes(currentBytes() + piece.length);
-	if (chunk.length > remaining || currentBytes() >= maxBytes) onLimit();
-	return piece.toString("utf8");
-}
 
 function isNotFound(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";

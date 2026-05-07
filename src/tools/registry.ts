@@ -1,4 +1,5 @@
 import type { AgentSession } from "../runtime/session.js";
+import { decideSandboxUse, type SandboxPolicy } from "./sandbox.js";
 import type { EvolvingAgentTool, ToolExecutionContext } from "./types.js";
 import { decideToolUse, toolCallLimitDecision, type ToolDecision } from "./policy.js";
 
@@ -38,12 +39,21 @@ export interface NormalizeToolResultOptions {
 	maxBytes?: number;
 }
 
+export interface ToolRegistryOptions {
+	sandboxPolicy?: SandboxPolicy;
+	disposables?: Array<() => Promise<void> | void>;
+}
+
 const defaultMaxResultBytes = 64 * 1024;
 
 export class ToolRegistry {
 	private readonly tools = new Map<string, EvolvingAgentTool>();
+	private readonly options: ToolRegistryOptions;
+	private readonly disposables: Array<() => Promise<void> | void>;
 
-	constructor(tools: EvolvingAgentTool[] = []) {
+	constructor(tools: EvolvingAgentTool[] = [], options: ToolRegistryOptions = {}) {
+		this.options = options;
+		this.disposables = [...(options.disposables ?? [])];
 		for (const tool of tools) {
 			this.register(tool);
 		}
@@ -53,12 +63,26 @@ export class ToolRegistry {
 		this.tools.set(tool.name, tool);
 	}
 
+	registerDisposable(dispose: () => Promise<void> | void): void {
+		this.disposables.push(dispose);
+	}
+
 	get(name: string): EvolvingAgentTool | undefined {
 		return this.tools.get(name);
 	}
 
 	list(): EvolvingAgentTool[] {
 		return Array.from(this.tools.values());
+	}
+
+	clone(): ToolRegistry {
+		return new ToolRegistry(this.list(), { ...(this.options.sandboxPolicy ? { sandboxPolicy: this.options.sandboxPolicy } : {}) });
+	}
+
+	async close(): Promise<void> {
+		const results = await Promise.allSettled(this.disposables.map((dispose) => dispose()));
+		const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+		if (rejected) throw rejected.reason;
 	}
 
 	async execute(session: AgentSession, call: ToolCall, hooks: RuntimeHook[] = [], signal?: AbortSignal): Promise<ToolResult> {
@@ -96,6 +120,20 @@ export class ToolRegistry {
 			}
 			if (hookResult.decision === "mutate") {
 				currentCall = { ...currentCall, input: hookResult.input };
+			}
+		}
+
+		if (this.options.sandboxPolicy) {
+			const sandboxDecision = decideSandboxUse({ session, tool, call: currentCall, policy: this.options.sandboxPolicy });
+			if (sandboxDecision.decision !== "allow") {
+				decision = { decision: "deny", reason: sandboxDecision.reason };
+				return this.finalize(session, hooks, withTiming(withToolLimits(tool, {
+					call: currentCall,
+					decision,
+					status: "denied",
+					errorMessage: sandboxDecision.reason,
+					metadata: { sandboxDecision: "deny", ...sandboxDecision.metadata },
+				}), startedAt));
 			}
 		}
 

@@ -1,8 +1,9 @@
 import type { AgentRuntimeExecutor, TaskExecutionOutput } from "../benchmark/types.js";
-import type { ModelClient } from "../models/types.js";
+import type { ModelClient, ModelMessage } from "../models/types.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
 import { ToolRegistry, type RuntimeHook } from "../tools/registry.js";
 import { createSubagentTool } from "../tools/subagent.js";
+import type { TraceEventObserver } from "./events.js";
 import { runAgentLoop } from "./loop.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { minDefined, withTimeout } from "./timeout.js";
@@ -15,10 +16,16 @@ export interface AgentRuntimeOptions {
 	now?: () => number;
 	subagents?: SubagentSpec[];
 	createToolRegistryForAgent?: (agent: AgentSpec) => ToolRegistry;
+	memoryContextProvider?: (session: AgentSession) => Promise<{ stable?: ModelMessage; dynamic?: ModelMessage; stableItemIds: string[]; dynamicItemIds: string[] }>;
+	eventObserver?: TraceEventObserver;
 }
 
 export class AgentRuntime implements AgentRuntimeExecutor {
 	constructor(private readonly options: AgentRuntimeOptions) {}
+
+	async close(): Promise<void> {
+		await this.options.toolRegistry?.close();
+	}
 
 	async runTask(agent: AgentSpec, task: TaskSpec, signal?: AbortSignal): Promise<TaskExecutionOutput> {
 		const createId = this.options.createId ?? (() => crypto.randomUUID());
@@ -43,12 +50,17 @@ export class AgentRuntime implements AgentRuntimeExecutor {
 				...(this.options.now ? { now: this.options.now } : {}),
 			}));
 		}
+		const memoryContext = session.agent.runtime.memoryPolicy === "long-term" ? await this.options.memoryContextProvider?.(session) : undefined;
 		const loopOptions = {
 			modelClient: this.options.modelClient,
 			createId,
 			...(toolRegistry ? { toolRegistry } : {}),
 			...(this.options.hooks ? { hooks: this.options.hooks } : {}),
 			...(this.options.now ? { now: this.options.now } : {}),
+			...(memoryContext?.stable ? { stableMemoryContext: memoryContext.stable } : {}),
+			...(memoryContext?.dynamic ? { dynamicMemoryContext: memoryContext.dynamic } : {}),
+			...(memoryContext ? { memoryContextItemIds: { stable: memoryContext.stableItemIds, dynamic: memoryContext.dynamicItemIds } } : {}),
+			...(this.options.eventObserver ? { eventObserver: this.options.eventObserver } : {}),
 		};
 		return withTimeout((timeoutSignal) => runAgentLoop(session, loopOptions, timeoutSignal), minDefined(session.task.timeoutMs, session.agent.runtime.timeoutMs), signal);
 	}
@@ -56,7 +68,7 @@ export class AgentRuntime implements AgentRuntimeExecutor {
 	private createToolRegistry(agent: AgentSpec): ToolRegistry | undefined {
 		if (this.options.createToolRegistryForAgent) return this.options.createToolRegistryForAgent(agent);
 		if (!this.options.toolRegistry) return undefined;
-		return new ToolRegistry(this.options.toolRegistry.list());
+		return this.options.toolRegistry.clone();
 	}
 }
 

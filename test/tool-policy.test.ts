@@ -96,6 +96,49 @@ describe("tool policy", () => {
 
 		expect(seen).toEqual(["denied", "unknown", "limit_exceeded"]);
 	});
+
+	it("denies sandbox violations before tool execution", async () => {
+		let executed = false;
+		const bashTool: EvolvingAgentTool = {
+			name: "bash",
+			description: "Bash",
+			permission: { defaultDecision: "allow", riskLevel: "high", requiresSandbox: true },
+			concurrency: "sequential",
+			async execute() {
+				executed = true;
+				return "ok";
+			},
+		};
+		const registry = new ToolRegistry([bashTool], { sandboxPolicy: { mode: "workspace", workspaceRoot: "/workspace", allowNetwork: false, allowBash: true } });
+		const session = createSession({ ...baseAgent, tools: { ...baseAgent.tools, allowedTools: ["bash"] } });
+
+		const result = await registry.execute(session, { id: "1", name: "bash", input: { command: "curl https://example.com" } });
+
+		expect(result).toMatchObject({ status: "denied", metadata: { sandboxDecision: "deny", sandboxMode: "workspace" } });
+		expect(executed).toBe(false);
+	});
+
+	it("checks sandbox after hooks mutate tool input", async () => {
+		let executed = false;
+		const bashTool: EvolvingAgentTool = {
+			name: "bash",
+			description: "Bash",
+			permission: { defaultDecision: "allow", riskLevel: "high", requiresSandbox: true },
+			concurrency: "sequential",
+			async execute() {
+				executed = true;
+				return "ok";
+			},
+		};
+		const registry = new ToolRegistry([bashTool], { sandboxPolicy: { mode: "workspace", workspaceRoot: "/workspace", allowNetwork: false, allowBash: true } });
+		const session = createSession({ ...baseAgent, tools: { ...baseAgent.tools, allowedTools: ["bash"] } });
+		const hooks: RuntimeHook[] = [{ beforeToolCall: () => ({ decision: "mutate", input: { command: "sudo whoami" } }) }];
+
+		const result = await registry.execute(session, { id: "1", name: "bash", input: { command: "npm test" } }, hooks);
+
+		expect(result).toMatchObject({ status: "denied", call: { input: { command: "sudo whoami" } }, metadata: { sandboxDecision: "deny" } });
+		expect(executed).toBe(false);
+	});
 });
 
 function createSession(agent: AgentSpec) {

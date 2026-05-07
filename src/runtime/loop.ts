@@ -1,8 +1,8 @@
 import type { TaskExecutionOutput } from "../benchmark/types.js";
-import type { ModelClient, ModelRequest, ModelResponse, ModelToolDefinition } from "../models/types.js";
+import type { ModelClient, ModelMessage, ModelRequest, ModelResponse, ModelToolDefinition } from "../models/types.js";
 import { normalizeToolResultContent, type ToolCall, type ToolRegistry, type RuntimeHook, type ToolResult } from "../tools/registry.js";
 import { decideToolUse } from "../tools/policy.js";
-import type { TraceEvent } from "./events.js";
+import type { TraceEvent, TraceEventObserver } from "./events.js";
 import type { AgentSession } from "./session.js";
 
 export interface AgentLoopOptions {
@@ -11,6 +11,10 @@ export interface AgentLoopOptions {
 	hooks?: RuntimeHook[];
 	createId?: () => string;
 	now?: () => number;
+	stableMemoryContext?: ModelMessage;
+	dynamicMemoryContext?: ModelMessage;
+	memoryContextItemIds?: { stable: string[]; dynamic: string[] };
+	eventObserver?: TraceEventObserver;
 }
 
 export async function runAgentLoop(
@@ -25,23 +29,27 @@ export async function runAgentLoop(
 	while (session.turnCount < session.agent.runtime.maxTurns) {
 		session.turnCount += 1;
 		const tools = modelTools(session, options.toolRegistry);
+		const requestMessages = memoryMessages(options, session.messages);
 		const request: ModelRequest = {
 			agent: session.agent,
 			task: session.task,
-			messages: session.messages,
+			messages: requestMessages,
 			turn: session.turnCount,
 			...(tools.length > 0 ? { tools } : {}),
 		};
 
-		session.trace.push(event(createId, now, "model_request", session, { messages: request.messages, turn: request.turn }));
+		const modelStartedAt = now();
+		recordEvent(session, options, event(createId, now, "model_request", session, { messages: request.messages, turn: request.turn, startedAt: modelStartedAt, ...(options.memoryContextItemIds ? { memoryContext: options.memoryContextItemIds } : {}) }));
 		lastResponse = await options.modelClient.complete(request, signal);
-		session.trace.push(event(createId, now, "model_response", session, lastResponse));
+		const modelEndedAt = now();
+		recordEvent(session, options, event(createId, now, "model_response", session, { ...lastResponse, timing: lastResponse.timing ?? { startedAt: modelStartedAt, endedAt: modelEndedAt, durationMs: Math.max(0, modelEndedAt - modelStartedAt) } }));
 
-		if (lastResponse.text || lastResponse.toolCalls?.length) {
+		if (lastResponse.text || lastResponse.reasoning || lastResponse.toolCalls?.length) {
 			session.messages.push({
 				role: "assistant",
 				content: lastResponse.text ?? "",
 				contentBlocks: [
+					...(lastResponse.reasoning ? [{ type: "reasoning" as const, text: lastResponse.reasoning }] : []),
 					...(lastResponse.text ? [{ type: "text" as const, text: lastResponse.text }] : []),
 					...(lastResponse.toolCalls?.map((call) => ({
 						type: "tool_call" as const,
@@ -111,7 +119,7 @@ async function executeToolCalls(
 		}
 
 		for (const call of batch) {
-			session.trace.push(event(createId, now, "tool_call", session, { call, concurrency: options.toolRegistry.get(call.name)?.concurrency ?? "sequential" }));
+			recordEvent(session, options, event(createId, now, "tool_call", session, { call, concurrency: options.toolRegistry.get(call.name)?.concurrency ?? "sequential" }));
 		}
 
 		const batchResults = batch.length > 1
@@ -119,15 +127,39 @@ async function executeToolCalls(
 			: [await options.toolRegistry.execute(session, batch[0]!, options.hooks, signal)];
 
 		for (const result of batchResults) {
-			session.trace.push(event(createId, now, "tool_result", session, result));
+			recordEvent(session, options, event(createId, now, "tool_result", session, result));
 			results.push(result);
 		}
 	}
 	return results;
 }
 
+function recordEvent(session: AgentSession, options: AgentLoopOptions, traceEvent: TraceEvent): void {
+	session.trace.push(traceEvent);
+	try {
+		void options.eventObserver?.(traceEvent);
+	} catch {
+		// UI observers must not affect runtime execution.
+	}
+}
+
 function isParallelSafe(registry: ToolRegistry, call: ToolCall): boolean {
 	return registry.get(call.name)?.concurrency === "parallel-safe";
+}
+
+function memoryMessages(options: AgentLoopOptions, messages: ModelMessage[]): ModelMessage[] {
+	const memoryContext = [options.stableMemoryContext, options.dynamicMemoryContext].filter((message): message is ModelMessage => message !== undefined);
+	if (memoryContext.length === 0) return messages;
+	const currentUserIndex = lastUserMessageIndex(messages);
+	if (currentUserIndex === -1) return [...memoryContext, ...messages];
+	return [...messages.slice(0, currentUserIndex), ...memoryContext, ...messages.slice(currentUserIndex)];
+}
+
+function lastUserMessageIndex(messages: ModelMessage[]): number {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		if (messages[index]?.role === "user") return index;
+	}
+	return -1;
 }
 
 function modelTools(session: AgentSession, registry?: ToolRegistry): ModelToolDefinition[] {

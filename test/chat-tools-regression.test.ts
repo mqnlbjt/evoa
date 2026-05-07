@@ -6,7 +6,7 @@ import { main } from "../src/cli/main.js";
 import type { FetchResponseLike } from "../src/tools/web-fetch.js";
 import { createIO, fakeToolOpenAIClient, nextId } from "./helpers/cli.js";
 
-const modelArgs = ["--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1"];
+const modelArgs = ["--provider", "local", "--model", "gpt-5.5", "--base-url", "http://localhost:8317/v1"];
 
 describe("chat tool regression", () => {
 	it("records read-only tool success in chat trace", async () => {
@@ -102,18 +102,62 @@ describe("chat tool regression", () => {
 			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", output: expect.objectContaining({ markdown: "# Fetched" }) }) }),
 		]));
 	});
+
+	it("auto-registers and allows memory tools for long-term chat agents", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-tools-"));
+		const agentFile = path.join(root, "agent.json");
+		const traceFile = path.join(root, "trace.json");
+		await writeAgent(agentFile, [], undefined, "long-term");
+		const io = createIO();
+		const code = await main(["chat", "remember this", "--agent", agentFile, ...modelArgs, "--session-dir", path.join(root, ".evolving-agent", "sessions"), "--trace", traceFile, "--json"], {
+			...io,
+			openAIClientFactory: () => fakeToolOpenAIClient("memory_remember", { content: "默认中文回答", layer: "knowledge", scope: "user", stable: true }, "remembered"),
+			workspaceRoot: root,
+			now: () => 1,
+			createId: nextId(),
+		});
+
+		expect(code).toBe(0);
+		expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, answer: "remembered" });
+		const trace = await readTrace(traceFile);
+		expect(trace.trace).toEqual(expect.arrayContaining([
+			expect.objectContaining({ type: "tool_call", payload: expect.objectContaining({ call: expect.objectContaining({ name: "memory_remember" }) }) }),
+			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", call: expect.objectContaining({ name: "memory_remember" }) }) }),
+		]));
+	});
+
+	it("keeps deniedTools effective for auto-allowed memory tools", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-tools-"));
+		const agentFile = path.join(root, "agent.json");
+		const traceFile = path.join(root, "trace.json");
+		await writeAgent(agentFile, [], ["memory_remember"], "long-term");
+		const io = createIO();
+		const code = await main(["chat", "remember this", "--agent", agentFile, ...modelArgs, "--trace", traceFile, "--json"], {
+			...io,
+			openAIClientFactory: () => fakeToolOpenAIClient("memory_remember", { content: "默认中文回答", layer: "knowledge", scope: "user" }, "done"),
+			workspaceRoot: root,
+			now: () => 1,
+			createId: nextId(),
+		});
+
+		expect(code).toBe(0);
+		const trace = await readTrace(traceFile);
+		expect(trace.trace).toEqual(expect.arrayContaining([
+			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "denied", call: expect.objectContaining({ name: "memory_remember" }), errorMessage: "tool memory_remember is denied by agent policy" }) }),
+		]));
+	});
 });
 
-async function writeAgent(filePath: string, allowedTools: string[], deniedTools?: string[]): Promise<void> {
+async function writeAgent(filePath: string, allowedTools: string[], deniedTools?: string[], memoryPolicy?: "long-term"): Promise<void> {
 	await writeFile(filePath, JSON.stringify({
 		id: "chat-tool-agent",
 		version: "1.0.0",
 		name: "Chat Tool Agent",
 		kind: "baseline",
-		model: { provider: "local", model: "gpt-5.4-mini" },
+		model: { provider: "local", model: "gpt-5.5" },
 		prompts: { system: "Use tools." },
 		tools: { allowedTools, ...(deniedTools ? { deniedTools } : {}), permissionMode: "allow", maxToolCalls: 2 },
-		runtime: { maxTurns: 3 },
+		runtime: { maxTurns: 3, ...(memoryPolicy ? { memoryPolicy } : {}) },
 	}));
 }
 

@@ -1,0 +1,334 @@
+import path, { dirname } from "node:path";
+import { loadAgentDefinitionsFromFile } from "../agents/loader.js";
+import type { ModelRegistryOptions } from "../models/registry.js";
+import { ModelRegistry } from "../models/registry.js";
+import { JsonMemoryStore } from "../memory/json-memory-store.js";
+import { LlmMemoryExtractor } from "../memory/llm-extractor.js";
+import { MemoryManager } from "../memory/manager.js";
+import { createMemoryTools, memoryToolNames } from "../memory/tools.js";
+import type { ModelClient, ModelMessage } from "../models/types.js";
+import { AgentRuntime } from "../runtime/agent-runtime.js";
+import type { RunEndPayload, RunStartPayload, TraceEvent, TraceEventObserver } from "../runtime/events.js";
+import { appendUserMessage, createAgentSession } from "../runtime/session.js";
+import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
+import type { AgentSessionStore, StoredAgentSession, StoredAgentStartupContext } from "../sessions/session-store.js";
+import { JsonSessionStore } from "../sessions/json-session-store.js";
+import type { ToolRegistry } from "../tools/registry.js";
+import { createToolRegistryForProfile } from "../tools/profiles.js";
+import type { BenchmarkCommand, ChatCommand, EvolveCommand, RunCommand, TuiCommand } from "./args.js";
+
+export interface ChatServiceDeps {
+	fetchFn?: typeof fetch;
+	openAIClientFactory?: ModelRegistryOptions["openAIClientFactory"];
+	toolRegistry?: ToolRegistry;
+	sessionStore?: AgentSessionStore;
+	workspaceRoot?: string;
+	now?: () => number;
+	createId?: () => string;
+	enableTuiAutomationTools?: boolean;
+}
+
+export type ResolvedChatCommand = ChatCommand & StoredAgentStartupContext;
+
+export interface ChatServiceContext {
+	command: ResolvedChatCommand;
+	agent: AgentSpec;
+	runtime: AgentRuntime;
+	sessionStore: AgentSessionStore;
+	stored: StoredAgentSession | undefined;
+	sessionId: string;
+	messages: ModelMessage[];
+	now: () => number;
+	createId: () => string;
+	toolRegistry: ToolRegistry;
+	memoryManager?: MemoryManager;
+	eventObserver?: TraceEventObserver;
+}
+
+export interface CreateChatServiceOptions {
+	eventObserver?: TraceEventObserver;
+}
+
+export interface ChatTurnOutput {
+	answer: string;
+	trace: TraceEvent[];
+}
+
+export async function createChatServiceContext(command: ChatCommand | TuiCommand, deps: ChatServiceDeps, options: CreateChatServiceOptions = {}): Promise<ChatServiceContext> {
+	const chatCommand = asChatCommand(command);
+	const sessionStore = chatSessionStore(chatCommand, deps);
+	const stored = chatCommand.resumeSessionId || chatCommand.sessionId ? await sessionStore.loadSession((chatCommand.resumeSessionId ?? chatCommand.sessionId)!) : undefined;
+	if (chatCommand.resumeSessionId && !stored) throw new Error(`session ${chatCommand.resumeSessionId} not found`);
+	const resolvedCommand = resolveChatCommand(chatCommand, stored);
+	const bundle = await loadAgentBundle(resolvedCommand.agentPath);
+	const agent = effectiveAgent(bundle.agent, resolvedCommand.provider, resolvedCommand.model);
+	const sessionId = resolvedCommand.resumeSessionId ?? resolvedCommand.sessionId ?? (deps.createId?.() ?? crypto.randomUUID());
+	const modelClient = createModelClient(resolvedCommand, deps);
+	const memoryManager = createMemoryManager(agent, resolvedCommand, modelClient);
+	const toolRegistry = createToolRegistry(resolvedCommand, deps);
+	registerMemoryTools(toolRegistry, resolvedCommand, deps, memoryManager);
+	const runtime = createRuntime(resolvedCommand, deps, bundle.subagents, toolRegistry, memoryManager, modelClient, options.eventObserver);
+	return {
+		command: resolvedCommand,
+		agent,
+		runtime,
+		sessionStore,
+		stored,
+		sessionId,
+		messages: chatMessages(stored, agent),
+		now: deps.now ?? Date.now,
+		createId: deps.createId ?? (() => crypto.randomUUID()),
+		toolRegistry,
+		...(memoryManager ? { memoryManager } : {}),
+		...(options.eventObserver ? { eventObserver: options.eventObserver } : {}),
+	};
+}
+
+export async function runChatTurn(context: ChatServiceContext, prompt: string): Promise<ChatTurnOutput> {
+	const startMessageIndex = context.messages.length;
+	const session = createAgentSession({ id: context.sessionId, agent: context.agent, task: chatTask(context.command, prompt), messages: context.messages });
+	const startedAt = context.now();
+	appendUserMessage(session, prompt);
+	recordChatEvent(context, session, "run_start", { agent: context.agent, task: session.task });
+	try {
+		const output = await context.runtime.runSession(session);
+		recordChatEvent(context, session, "run_end", { status: "passed", durationMs: context.now() - startedAt });
+		context.messages = session.messages;
+		await context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: memoryProjectId(context.command), messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId });
+		if (context.command.resumeSessionId || context.command.sessionId) {
+			const stored = storedSession(context.sessionId, context.agent, context.command, session.messages, context.stored, context.now());
+			await context.sessionStore.saveSession(stored);
+			context.stored = stored;
+		}
+		return { answer: output.answer ?? "", trace: output.trace ?? [] };
+	} catch (error) {
+		recordChatEvent(context, session, "error", { message: error instanceof Error ? error.message : String(error) });
+		recordChatEvent(context, session, "run_end", { status: "errored", durationMs: context.now() - startedAt });
+		throw error;
+	}
+}
+
+function asChatCommand(command: ChatCommand | TuiCommand): ChatCommand {
+	if (command.kind === "chat") return command;
+	return { ...command, kind: "chat" };
+}
+
+function recordChatEvent<TPayload extends RunStartPayload | RunEndPayload | { message: string }>(context: ChatServiceContext, session: ReturnType<typeof createAgentSession>, type: "run_start" | "run_end" | "error", payload: TPayload): void {
+	const event: TraceEvent<TPayload> = {
+		id: context.createId(),
+		type,
+		timestamp: context.now(),
+		agentId: session.agent.id,
+		taskId: session.task.id,
+		sessionId: session.id,
+		payload,
+	};
+	session.trace.push(event);
+	try {
+		void context.eventObserver?.(event);
+	} catch {
+		// UI observers must not affect chat turn execution.
+	}
+}
+
+export function createRuntimeForCommand(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, subagents: SubagentSpec[] = [], memoryManager?: MemoryManager, modelClient = createModelClient(command, deps), eventObserver?: TraceEventObserver): AgentRuntime {
+	const toolRegistry = createToolRegistry(command, deps);
+	registerMemoryTools(toolRegistry, command, deps, memoryManager);
+	const createToolRegistryForAgent = () => toolRegistryForAgent(command, deps, memoryManager);
+	return new AgentRuntime({
+		modelClient,
+		toolRegistry,
+		createToolRegistryForAgent,
+		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectId(command), prompt: session.task.prompt, now: deps.now ?? Date.now }) } : {}),
+		...(subagents.length > 0 ? { subagents } : {}),
+		...(deps.now ? { now: deps.now } : {}),
+		...(deps.createId ? { createId: deps.createId } : {}),
+		...(eventObserver ? { eventObserver } : {}),
+	});
+}
+
+export async function loadAgentBundle(agentPath: string): Promise<{ agent: AgentSpec; subagents: SubagentSpec[] }> {
+	const bundle = await loadAgentDefinitionsFromFile(agentPath);
+	const agent = bundle.agents[0];
+	if (!agent) throw new Error("agent bundle must include at least one agent");
+	return { agent, subagents: bundle.subagents };
+}
+
+export function effectiveAgent(agent: AgentSpec, provider: string, model: string): AgentSpec {
+	return {
+		...agent,
+		model: {
+			...agent.model,
+			provider,
+			model,
+		},
+		tools: effectiveTools(agent),
+	};
+}
+
+function createMemoryManager(agent: AgentSpec, command: ResolvedChatCommand, modelClient: ModelClient): MemoryManager | undefined {
+	if (agent.runtime.memoryPolicy !== "long-term") return undefined;
+	return new MemoryManager(new JsonMemoryStore(path.join(chatStorageRoot(command), ".evolving-agent", "memory")), new LlmMemoryExtractor(modelClient, agent));
+}
+
+function effectiveTools(agent: AgentSpec): AgentSpec["tools"] {
+	if (agent.runtime.memoryPolicy !== "long-term") return agent.tools;
+	return { ...agent.tools, allowedTools: [...new Set([...agent.tools.allowedTools, ...memoryToolNames])] };
+}
+
+function registerMemoryTools(toolRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): void {
+	if (!memoryManager || toolRegistry.get("memory_context")) return;
+	for (const tool of createMemoryTools({ manager: memoryManager, projectId: memoryProjectId(command), now: deps.now ?? Date.now, createId: deps.createId ?? (() => crypto.randomUUID()) })) {
+		toolRegistry.register(tool);
+	}
+}
+
+function createRuntime(command: ResolvedChatCommand, deps: ChatServiceDeps, subagents: SubagentSpec[], toolRegistry: ToolRegistry, memoryManager: MemoryManager | undefined, modelClient: ModelClient, eventObserver?: TraceEventObserver): AgentRuntime {
+	const createToolRegistryForAgent = () => toolRegistryForAgent(command, deps, memoryManager);
+	return new AgentRuntime({
+		modelClient,
+		toolRegistry,
+		createToolRegistryForAgent,
+		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectId(command), prompt: session.task.prompt, now: deps.now ?? Date.now }) } : {}),
+		...(subagents.length > 0 ? { subagents } : {}),
+		...(deps.now ? { now: deps.now } : {}),
+		...(deps.createId ? { createId: deps.createId } : {}),
+		...(eventObserver ? { eventObserver } : {}),
+	});
+}
+
+function createToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ToolRegistry {
+	const workspaceRoot = deps.workspaceRoot ?? process.cwd();
+	return deps.toolRegistry ?? createToolRegistryForProfile({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(deps.enableTuiAutomationTools === false ? {} : { tuiAutomation: { deps } }) });
+}
+
+function toolRegistryForAgent(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): ToolRegistry {
+	const registry = deps.toolRegistry ?? createToolRegistry(command, deps);
+	registerMemoryTools(registry, command, deps, memoryManager);
+	return registry;
+}
+
+function chatMessages(stored: StoredAgentSession | undefined, agent: AgentSpec): ModelMessage[] {
+	if (!stored) return [{ role: "system", content: agent.prompts.system }];
+	const messages = [...stored.messages];
+	if (messages[0]?.role === "system") return [{ ...messages[0], content: agent.prompts.system, contentBlocks: [{ type: "text", text: agent.prompts.system }] }, ...messages.slice(1)];
+	return [{ role: "system", content: agent.prompts.system }, ...messages];
+}
+
+function resolveChatCommand(command: ChatCommand, stored: StoredAgentSession | undefined): ResolvedChatCommand {
+	const sessionDir = resolveOptionalChatString(command, stored, "sessionDir");
+	const agentPath = resolveRequiredChatString(command, stored, "agentPath", "--agent");
+	return {
+		...command,
+		agentPath,
+		provider: resolveRequiredChatString(command, stored, "provider", "--provider"),
+		model: resolveRequiredChatString(command, stored, "model", "--model"),
+		baseURL: resolveRequiredChatString(command, stored, "baseURL", "--base-url"),
+		providerFormat: resolveProviderFormat(command, stored),
+		toolProfile: resolveToolProfile(command, stored),
+		providedFlags: { ...command.providedFlags, agentPath: command.providedFlags.agentPath || stored?.startupContext?.agentPath !== undefined || agentPath !== command.agentPath },
+		...(sessionDir ? { sessionDir } : {}),
+	};
+}
+
+function resolveRequiredChatString(command: ChatCommand, stored: StoredAgentSession | undefined, key: "agentPath" | "provider" | "model" | "baseURL", flag: string): string {
+	const value = resolveOptionalChatString(command, stored, key);
+	if (value) return value;
+	if (command.resumeSessionId && stored && !stored.startupContext) throw new Error(`session ${command.resumeSessionId} does not include startup context; provide --agent --provider --model --base-url once to upgrade it`);
+	throw new Error(`missing required option ${flag}`);
+}
+
+function resolveOptionalChatString(command: ChatCommand, stored: StoredAgentSession | undefined, key: "agentPath" | "provider" | "model" | "baseURL" | "sessionDir"): string | undefined {
+	const commandValue = command[key];
+	if (command.providedFlags[key] && commandValue) return commandValue;
+	const storedValue = stored?.startupContext?.[key];
+	if (storedValue) return storedValue;
+	return commandValue;
+}
+
+function resolveProviderFormat(command: ChatCommand, stored: StoredAgentSession | undefined): ResolvedChatCommand["providerFormat"] {
+	if (command.providedFlags.providerFormat) return command.providerFormat;
+	return stored?.startupContext?.providerFormat ?? command.providerFormat;
+}
+
+function resolveToolProfile(command: ChatCommand, stored: StoredAgentSession | undefined): ResolvedChatCommand["toolProfile"] {
+	if (command.providedFlags.toolProfile) return command.toolProfile;
+	return stored?.startupContext?.toolProfile ?? command.toolProfile;
+}
+
+function chatTask(command: ResolvedChatCommand, prompt: string): TaskSpec {
+	return {
+		id: `chat-${command.sessionId ?? command.resumeSessionId ?? "turn"}`,
+		type: "general",
+		title: "Chat",
+		prompt,
+		scoring: { method: "rubric", config: { contains: [] } },
+	};
+}
+
+function chatSessionStore(command: ChatCommand, deps: ChatServiceDeps): AgentSessionStore {
+	if (deps.sessionStore) return deps.sessionStore;
+	return new JsonSessionStore(command.sessionDir ?? path.join(process.cwd(), ".evolving-agent", "sessions"));
+}
+
+function storedSession(id: string, agent: AgentSpec, command: ResolvedChatCommand, messages: StoredAgentSession["messages"], existing: StoredAgentSession | undefined, timestamp: number): StoredAgentSession {
+	return {
+		id,
+		agentId: agent.id,
+		...(agent.version ? { agentVersion: agent.version } : {}),
+		messages,
+		startupContext: storedStartupContext(command),
+		createdAt: existing?.createdAt ?? timestamp,
+		updatedAt: timestamp,
+		...(existing?.metadata ? { metadata: existing.metadata } : {}),
+	};
+}
+
+function storedStartupContext(command: ResolvedChatCommand): StoredAgentStartupContext {
+	return {
+		agentPath: command.agentPath,
+		provider: command.provider,
+		model: command.model,
+		baseURL: command.baseURL,
+		providerFormat: command.providerFormat,
+		toolProfile: command.toolProfile,
+		...(command.sessionDir ? { sessionDir: command.sessionDir } : {}),
+	};
+}
+
+function createModelClient(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ModelClient {
+	const registry = createModelRegistry(command, deps);
+	registry.registerModel(command.provider, {
+		id: command.model,
+		providerId: command.provider,
+		format: command.providerFormat,
+	});
+	return registry.createClient(command.provider, command.model);
+}
+
+function createModelRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ModelRegistry {
+	const registry = new ModelRegistry({
+		...(deps.fetchFn ? { fetchFn: deps.fetchFn } : {}),
+		...(deps.openAIClientFactory ? { openAIClientFactory: deps.openAIClientFactory } : {}),
+	});
+	registry.registerProvider({
+		id: command.provider,
+		baseURL: command.baseURL,
+		format: command.providerFormat,
+		...(command.apiKey ? { apiKey: command.apiKey } : {}),
+	});
+	return registry;
+}
+
+function memoryProjectId(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): string {
+	return command.kind === "chat" ? chatStorageRoot(command) : process.cwd();
+}
+
+function chatStorageRoot(command: ResolvedChatCommand): string {
+	if (!command.sessionDir) return process.cwd();
+	return isDefaultSessionDir(command.sessionDir) ? dirname(dirname(command.sessionDir)) : command.sessionDir;
+}
+
+function isDefaultSessionDir(sessionDir: string): boolean {
+	return path.basename(sessionDir) === "sessions" && path.basename(dirname(sessionDir)) === ".evolving-agent";
+}

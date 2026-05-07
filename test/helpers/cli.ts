@@ -26,6 +26,19 @@ export function fakeOpenAIClient(answer: string): OpenAIResponsesClient {
 	return { responses: { async create() { return { output_text: answer }; } } };
 }
 
+export function fakeQueuedOpenAIClient(answers: string[]): OpenAIResponsesClient {
+	let index = 0;
+	return {
+		responses: {
+			async create() {
+				const answer = answers[Math.min(index, answers.length - 1)] ?? "";
+				index += 1;
+				return { output_text: answer };
+			},
+		},
+	};
+}
+
 export function fakeToolOpenAIClient(toolName: string, input: unknown = { path: "note.txt" }, answer = "saw tool"): OpenAIResponsesClient {
 	let calls = 0;
 	return {

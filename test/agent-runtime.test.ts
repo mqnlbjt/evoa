@@ -91,6 +91,45 @@ describe("AgentRuntime", () => {
 		});
 	});
 
+	it("preserves reasoning content in assistant messages", async () => {
+		let turn = 0;
+		const seenRequests: unknown[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenRequests.push(request);
+				turn += 1;
+				if (turn === 1) return { reasoning: "hidden chain", toolCalls: [{ id: "call-1", name: "echo", input: { value: "ok" } }] };
+				return { text: "done" };
+			},
+		};
+		const registry = new ToolRegistry([
+			{
+				name: "echo",
+				description: "Echo input",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				async execute(input) {
+					return input;
+				},
+			},
+		]);
+
+		await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask(agent, task);
+
+		expect(seenRequests[1]).toMatchObject({
+			messages: expect.arrayContaining([
+				{
+					role: "assistant",
+					content: "",
+					contentBlocks: [
+						{ type: "reasoning", text: "hidden chain" },
+						{ type: "tool_call", id: "call-1", name: "echo", input: { value: "ok" } },
+					],
+				},
+			]),
+		});
+	});
+
 	it("preserves tool-only assistant turns before tool results", async () => {
 		let turn = 0;
 		const seenRequests: unknown[] = [];

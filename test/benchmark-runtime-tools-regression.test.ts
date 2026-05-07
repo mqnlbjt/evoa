@@ -105,6 +105,26 @@ describe("benchmark runtime tool regression", () => {
 		await expect(access(path.join(workspaceRoot, "written.txt"))).resolves.toBeUndefined();
 	});
 
+	it("records benchmark-sandbox tool-policy denial without executing bash", async () => {
+		const workspaceRoot = await mkdtemp(path.join(tmpdir(), "evolving-agent-benchmark-sandbox-deny-"));
+		const ids = createIds();
+		const model = scriptedModelClient((request) => {
+			if (request.turn === 1) return { toolCalls: [{ id: "call-bash", name: "bash", input: { command: "curl https://example.com" } }] };
+			return { text: "recovered after sandbox denied" };
+		});
+		const agent = baseAgent({ allowedTools: ["bash"] });
+		const task = toolTask("sandbox-bash-denied", ["bash"], "recovered after sandbox denied");
+		const runner = createRunner({ agent, model: model.client, profile: "benchmark-sandbox", workspaceRoot, ids });
+
+		const run = await runner.runTask(agent, task);
+
+		expect(run.status).toBe("passed");
+		expect(toolResults(run)).toEqual([expect.objectContaining({ status: "denied", metadata: expect.objectContaining({ sandboxDecision: "deny", sandboxMode: "workspace" }) })]);
+		expect(model.requestsFor("sandbox-bash-denied")[1]?.messages).toEqual(expect.arrayContaining([
+			expect.objectContaining({ role: "tool", contentBlocks: expect.arrayContaining([expect.objectContaining({ type: "tool_result", isError: true })]) }),
+		]));
+	});
+
 	it("keeps registered agent-denied tools recoverable without executing them", async () => {
 		const workspaceRoot = await mkdtemp(path.join(tmpdir(), "evolving-agent-benchmark-denied-"));
 		const ids = createIds();

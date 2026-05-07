@@ -24,6 +24,8 @@ export interface TraceEvent<TPayload = unknown> {
 	subagentId?: string;
 }
 
+export type TraceEventObserver = (event: TraceEvent) => void | Promise<void>;
+
 export interface RunStartPayload {
 	agent: AgentSpec;
 	task: TaskSpec;

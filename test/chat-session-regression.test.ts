@@ -6,7 +6,7 @@ import { main } from "../src/cli/main.js";
 import { createIO, fakeOpenAIClient, fakeToolOpenAIClient, lines, nextId } from "./helpers/cli.js";
 
 const agentPath = "/home/wyq/data/pi/evolving-agent/examples/agents/basic.json";
-const providerArgs = ["--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1"];
+const providerArgs = ["--provider", "local", "--model", "gpt-5.5", "--base-url", "http://localhost:8317/v1"];
 const modelArgs = ["--agent", agentPath, ...providerArgs];
 
 describe("chat session regression", () => {
@@ -25,7 +25,7 @@ describe("chat session regression", () => {
 		const code = await main(["chat", ...modelArgs], {
 			...io,
 			inputLines: lines(["remember", "recall", "/exit"]),
-			openAIClientFactory: () => ({ responses: { async create(input) { calls += 1; if (calls === 2) secondRequest = input; return { output_text: calls === 1 ? "stored" : "recalled" }; } } }),
+			openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); calls += 1; if (calls === 2) secondRequest = input; return { output_text: calls === 1 ? "stored" : "recalled" }; } } }),
 			now: () => 1,
 			createId: nextId(),
 		});
@@ -43,13 +43,13 @@ describe("chat session regression", () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
 		const first = createIO();
 		await main(["chat", "remember", ...modelArgs, "--session", "demo", "--session-dir", root, "--json"], { ...first, openAIClientFactory: () => fakeOpenAIClient("stored"), now: () => 1, createId: nextId() });
-		expect(await readSession(root, "demo")).toMatchObject({ startupContext: { agentPath, provider: "local", model: "gpt-5.4-mini", baseURL: "http://localhost:8317/v1", toolProfile: "dangerous" } });
+		expect(await readSession(root, "demo")).toMatchObject({ startupContext: { agentPath, provider: "local", model: "gpt-5.5", baseURL: "http://localhost:8317/v1", toolProfile: "dangerous" } });
 
 		let resumedRequest: unknown;
 		const second = createIO();
 		const code = await main(["chat", "recall", "--resume", "demo", "--session-dir", root, "--json"], {
 			...second,
-			openAIClientFactory: () => ({ responses: { async create(input) { resumedRequest = input; return { output_text: "recalled" }; } } }),
+			openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); resumedRequest = input; return { output_text: "recalled" }; } } }),
 			now: () => 2,
 			createId: nextId(),
 		});
@@ -72,7 +72,7 @@ describe("chat session regression", () => {
 		const second = createIO();
 		const code = await main(["chat", "recall", "--resume", "demo", "--session-dir", root, "--model", "new-model", "--json"], {
 			...second,
-			openAIClientFactory: () => ({ responses: { async create(input) { model = input.model; return { output_text: "recalled" }; } } }),
+			openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); model = input.model; return { output_text: "recalled" }; } } }),
 			now: () => 2,
 			createId: nextId(),
 		});
@@ -168,7 +168,7 @@ describe("chat session regression", () => {
 		const second = createIO();
 		const code = await main(["chat", "recall", "--resume", "demo", "--session-dir", root, "--json"], {
 			...second,
-			openAIClientFactory: () => ({ responses: { async create(input) { resumedInput = input.input; return { output_text: "recalled" }; } } }),
+			openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); resumedInput = input.input; return { output_text: "recalled" }; } } }),
 			workspaceRoot: root,
 			now: () => 2,
 			createId: nextId(),
@@ -179,6 +179,104 @@ describe("chat session regression", () => {
 			expect.objectContaining({ type: "function_call", call_id: "call_1", name: "read_file" }),
 			expect.objectContaining({ type: "function_call_output", call_id: "call_1" }),
 		]));
+	});
+
+	it("uses current agent memory policy when resuming old sessions", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
+		const agentFile = path.join(root, "agent.json");
+		await writeAgent(agentFile, [], "long-term");
+		await writeSession(root, "old", {
+			id: "old",
+			agentId: "chat-session-tool-agent",
+			messages: [{ role: "system", content: "old prompt" }, { role: "user", content: "hello" }, { role: "assistant", content: "Hello." }],
+			startupContext: { agentPath: agentFile, provider: "local", model: "gpt-5.5", baseURL: "http://localhost:8317/v1", providerFormat: "openai-responses", toolProfile: "dangerous" },
+			createdAt: 1,
+			updatedAt: 1,
+		});
+		const first = createIO();
+		await main(["chat", "请记住 我是wyq 我是黄金山爸爸", "--agent", agentFile, ...providerArgs, "--session", "source", "--session-dir", root, "--json"], {
+			...first,
+			openAIClientFactory: () => fakeChatAndMemoryClient("记住了。", { memories: [{ layer: "knowledge", content: "用户是wyq。黄金山是用户的孩子。", topic: "user", scope: "user", stable: true, key: "user.identity.name", suitability: "long_term", safety: "safe", sourceMessageIndexes: [1] }] }),
+			now: () => 2,
+			createId: nextId(),
+		});
+
+		let resumedInput: unknown;
+		const second = createIO();
+		await main(["chat", "黄金山是谁", "--resume", "old", "--session-dir", root, "--json"], {
+			...second,
+			openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); resumedInput = input.input; return { output_text: "黄金山是你的孩子。" }; } } }),
+			now: () => 3,
+			createId: nextId(),
+		});
+
+		expect(resumedInput).toEqual(expect.arrayContaining([
+			expect.objectContaining({ role: "user", content: expect.stringContaining("黄金山是用户的孩子") }),
+		]));
+		expect((resumedInput as Array<{ role?: string; content?: string }>).slice(-2)).toEqual([
+			expect.objectContaining({ role: "user", content: expect.stringContaining("Long-term memory stable bootstrap context") }),
+			expect.objectContaining({ role: "user", content: "黄金山是谁" }),
+		]);
+		expect(await readSession(root, "old")).toMatchObject({ messages: expect.arrayContaining([expect.objectContaining({ content: "Use tools." })]) });
+	});
+
+	it("shares long-term memory across chat sessions without persisting injected context", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
+		const agentFile = path.join(root, "agent.json");
+		await writeAgent(agentFile, [], "long-term");
+		const first = createIO();
+		await main(["chat", "记住我是 wyq，以后默认中文回答", "--agent", agentFile, ...providerArgs, "--session", "a", "--session-dir", root, "--json"], {
+			...first,
+			openAIClientFactory: () => fakeChatAndMemoryClient("stored", { memories: [{ layer: "knowledge", content: "记住我是 wyq，以后默认中文回答", topic: "user", scope: "user", stable: true, key: "user.identity.name", suitability: "long_term", safety: "safe", sourceMessageIndexes: [1] }] }),
+			now: () => 1,
+			createId: nextId(),
+		});
+
+		let secondInput: unknown;
+		const second = createIO();
+		const code = await main(["chat", "我是谁", "--agent", agentFile, ...providerArgs, "--session", "b", "--session-dir", root, "--json"], {
+			...second,
+			openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); secondInput = input.input; return { output_text: "recalled" }; } } }),
+			now: () => 2,
+			createId: nextId(),
+		});
+
+		expect(code).toBe(0);
+		expect(secondInput).toEqual(expect.arrayContaining([
+			expect.objectContaining({ role: "user", content: expect.stringContaining("Long-term memory stable bootstrap context") }),
+			expect.objectContaining({ role: "user", content: "我是谁" }),
+		]));
+		expect(JSON.stringify(await readSession(root, "b"))).not.toContain("Long-term memory stable bootstrap context");
+	});
+
+	it("injects only the winning memory when preferences conflict", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
+		const agentFile = path.join(root, "agent.json");
+		await writeAgent(agentFile, [], "long-term", "conflict-agent");
+		await main(["chat", "以后默认中文回答", "--agent", agentFile, ...providerArgs, "--session", "a", "--session-dir", root, "--json"], {
+			...createIO(),
+			openAIClientFactory: () => fakeChatAndMemoryClient("stored", { memories: [{ layer: "knowledge", content: "默认中文回答", topic: "user", scope: "user", stable: true, key: "user.preference.language", suitability: "long_term", safety: "safe", sourceMessageIndexes: [1] }] }),
+			now: () => 1,
+			createId: nextId(),
+		});
+		await main(["chat", "以后默认英文回答", "--agent", agentFile, ...providerArgs, "--session", "b", "--session-dir", root, "--json"], {
+			...createIO(),
+			openAIClientFactory: () => fakeChatAndMemoryClient("stored", { memories: [{ layer: "knowledge", content: "默认英文回答", topic: "user", scope: "user", stable: true, key: "user.preference.language", suitability: "long_term", safety: "safe", sourceMessageIndexes: [1] }] }),
+			now: () => 2,
+			createId: nextId(),
+		});
+
+		let input: unknown;
+		const code = await main(["chat", "默认用什么语言", "--agent", agentFile, ...providerArgs, "--session", "c", "--session-dir", root, "--json"], {
+			...createIO(),
+			openAIClientFactory: () => ({ responses: { async create(request) { if (isMemoryExtractionRequest(request)) return invalidMemoryExtraction(); input = request.input; return { output_text: "English" }; } } }),
+			now: () => 3,
+			createId: nextId(),
+		});
+
+		expect(code).toBe(0);
+		expect(JSON.stringify(input)).toContain("默认英文回答");
+		expect(JSON.stringify(input)).not.toContain("默认中文回答");
 	});
 
 	it("reports old sessions without startup context when resume args are incomplete", async () => {
@@ -200,7 +298,7 @@ describe("chat session regression", () => {
 		const code = await main(["chat", "recall", ...modelArgs, "--resume", "legacy", "--session-dir", root, "--json"], { ...io, openAIClientFactory: () => fakeOpenAIClient("recalled"), now: () => 2, createId: nextId() });
 
 		expect(code).toBe(0);
-		expect(await readSession(root, "legacy")).toMatchObject({ startupContext: { agentPath, model: "gpt-5.4-mini" } });
+		expect(await readSession(root, "legacy")).toMatchObject({ startupContext: { agentPath, model: "gpt-5.5" } });
 	});
 
 	it("rejects conflicting session options", async () => {
@@ -221,6 +319,24 @@ describe("chat session regression", () => {
 	});
 });
 
+function isMemoryExtractionRequest(input: { instructions?: unknown; input?: unknown }): boolean {
+	return input.instructions === "Extract structured long-term memory candidates as strict JSON.";
+}
+
+function invalidMemoryExtraction(): { output_text: string } {
+	return { output_text: "not json" };
+}
+
+function fakeChatAndMemoryClient(answer: string, memory: unknown) {
+	return {
+		responses: {
+			async create(input: { instructions?: unknown }) {
+				return isMemoryExtractionRequest(input) ? { output_text: JSON.stringify(memory) } : { output_text: answer };
+			},
+		},
+	};
+}
+
 async function readSession(root: string, id: string): Promise<unknown> {
 	return JSON.parse(await readFile(path.join(root, `${id}.json`), "utf8"));
 }
@@ -229,16 +345,16 @@ async function writeSession(root: string, id: string, value: unknown): Promise<v
 	await writeFile(path.join(root, `${id}.json`), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function writeAgent(filePath: string, allowedTools: string[]): Promise<void> {
+async function writeAgent(filePath: string, allowedTools: string[], memoryPolicy: "none" | "session" | "long-term" = "none", id = "chat-session-tool-agent"): Promise<void> {
 	await writeFile(filePath, JSON.stringify({
-		id: "chat-session-tool-agent",
+		id,
 		version: "1.0.0",
 		name: "Chat Session Tool Agent",
 		kind: "baseline",
-		model: { provider: "local", model: "gpt-5.4-mini" },
+		model: { provider: "local", model: "gpt-5.5" },
 		prompts: { system: "Use tools." },
 		tools: { allowedTools, permissionMode: "allow", maxToolCalls: 2 },
-		runtime: { maxTurns: 3 },
+		runtime: { maxTurns: 3, memoryPolicy },
 	}));
 }
 

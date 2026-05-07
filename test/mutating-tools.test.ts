@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { BashExecuteOptions, BashExecutor } from "../src/tools/bash-executor.js";
 import { createToolRegistryForProfile } from "../src/tools/profiles.js";
 import type { AgentSession } from "../src/runtime/session.js";
 import type { AgentSpec, TaskSpec } from "../src/specs.js";
@@ -191,6 +192,49 @@ describe("bash tool", () => {
 		expect(result.output).toMatchObject({ truncated: true });
 		expect((result.output as { stdout: string }).stdout.length).toBeLessThanOrEqual(10);
 	});
+
+	it("denies network bash commands in benchmark-sandbox", async () => {
+		const root = await fixtureRoot();
+		const registry = createToolRegistryForProfile({ profile: "benchmark-sandbox", workspaceRoot: root });
+
+		const result = await registry.execute(createSession(), { id: "1", name: "bash", input: { command: "curl https://example.com" } });
+
+		expect(result).toMatchObject({ status: "denied", metadata: { sandboxDecision: "deny", sandboxMode: "workspace" } });
+	});
+
+	it("uses injected bash executor", async () => {
+		const root = await fixtureRoot();
+		const calls: BashExecuteOptions[] = [];
+		const bashExecutor: BashExecutor = { async execute(options) { calls.push(options); return { command: options.command, cwd: "fake", exitCode: 0, signal: null, stdout: "fake\n", stderr: "", truncated: false, timedOut: false, durationMs: 1 }; } };
+		const registry = createToolRegistryForProfile({ profile: "benchmark-sandbox", workspaceRoot: root, bashExecutor });
+
+		const result = await registry.execute(createSession(), { id: "1", name: "bash", input: { command: "node -e \"console.log('ok')\"" } });
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({ command: "node -e \"console.log('ok')\"", cwd: root, workspaceRoot: root });
+		expect(result.output).toMatchObject({ cwd: "fake", stdout: "fake\n" });
+	});
+
+	it("denies sandbox violations before injected executor runs", async () => {
+		const root = await fixtureRoot();
+		let executed = false;
+		const bashExecutor: BashExecutor = { async execute(options) { executed = true; return { command: options.command, cwd: ".", exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false, durationMs: 1 }; } };
+		const registry = createToolRegistryForProfile({ profile: "benchmark-sandbox", workspaceRoot: root, bashExecutor });
+
+		const result = await registry.execute(createSession(), { id: "1", name: "bash", input: { command: "curl https://example.com" } });
+
+		expect(result.status).toBe("denied");
+		expect(executed).toBe(false);
+	});
+
+	it("keeps dangerous profile compatible without sandbox denial", async () => {
+		const root = await fixtureRoot();
+		const registry = createToolRegistryForProfile({ profile: "dangerous", workspaceRoot: root });
+
+		const result = await registry.execute(createSession(), { id: "1", name: "bash", input: { command: "node -e \"console.log('ok')\"" } });
+
+		expect(result).toMatchObject({ status: "success", output: { exitCode: 0, stdout: "ok\n" } });
+	});
 });
 
 describe("tool profiles", () => {
@@ -206,6 +250,17 @@ describe("tool profiles", () => {
 		const registry = createToolRegistryForProfile({ profile: "coding", workspaceRoot: root });
 
 		expect(registry.list().map((tool) => tool.name)).toEqual(["read_file", "list_dir", "find_files", "grep", "web_fetch", "write_file", "edit_file"]);
+	});
+
+	it("denies web_fetch in benchmark-sandbox", async () => {
+		const root = await fixtureRoot();
+		const registry = createToolRegistryForProfile({ profile: "benchmark-sandbox", workspaceRoot: root });
+		const session = createSession();
+		session.agent.tools.allowedTools = ["web_fetch"];
+
+		const result = await registry.execute(session, { id: "1", name: "web_fetch", input: { url: "https://example.com" } });
+
+		expect(result).toMatchObject({ status: "denied", metadata: { sandboxDecision: "deny", sandboxMode: "workspace" } });
 	});
 });
 
