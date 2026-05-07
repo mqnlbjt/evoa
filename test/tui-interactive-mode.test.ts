@@ -70,9 +70,15 @@ describe("InteractiveMode", () => {
 		}
 		expect(frameText(terminal)).toContain("┃ LLM  latest response");
 		terminal.emitInput("\x1b[5~");
+		await waitFor(() => frameText(terminal).includes("┃ You  second"));
+		expect(frameText(terminal)).toContain("┃ LLM  middle response");
+		expect(frameText(terminal)).not.toContain("┃ LLM  latest response");
+		terminal.emitInput("\x1b[5~");
 		await waitFor(() => frameText(terminal).includes("┃ You  first"));
 		expect(frameText(terminal)).toContain("┃ LLM  old response");
-		expect(frameText(terminal)).not.toContain("┃ LLM  latest response");
+		expect(frameText(terminal)).not.toContain("┃ LLM  middle response");
+		terminal.emitInput("\x1b[6~");
+		await waitFor(() => frameText(terminal).includes("┃ LLM  middle response"));
 		terminal.emitInput("\x1b[6~");
 		await waitFor(() => frameText(terminal).includes("┃ LLM  latest response"));
 		terminal.emitInput("/exit");
@@ -223,6 +229,35 @@ describe("InteractiveMode", () => {
 		await expect(exit).resolves.toBe(0);
 	});
 
+	it("does not repeat visible log lines across page-sized history scrolls", async () => {
+		const terminal = new FakeTerminal({ width: 80, height: 10 });
+		const mode = new InteractiveMode({
+			terminal,
+			command: { kind: "tui", format: "human", agentPath: noMemoryAgentPath, provider: "local", model: "gpt-5.5", baseURL: "http://localhost:8317/v1", providerFormat: "openai-responses", toolProfile: "dangerous", providedFlags: { agentPath: true, provider: true, model: true, baseURL: true } },
+			deps: { openAIClientFactory: () => fakeQueuedOpenAIClient(["one", "two", "three"]), now: () => 1, createId: nextId() },
+			now: () => 1,
+		});
+		const exit = mode.start();
+		await waitFor(() => terminal.outputText().includes("evolving-agent"));
+		for (const [input, answer] of [["alpha", "one"], ["beta", "two"], ["gamma", "three"]] as const) {
+			terminal.emitInput(input);
+			terminal.emitInput("\n");
+			await waitFor(() => frameText(terminal).includes(`┃ LLM  ${answer}`) && frameText(terminal).includes("status: done"));
+		}
+		const latestLines = logLines(frameText(terminal));
+		terminal.emitInput("\x1b[5~");
+		await waitFor(() => frameText(terminal).includes("┃ You  beta"));
+		const previousLines = logLines(frameText(terminal));
+		expect(previousLines.some((line) => latestLines.includes(line))).toBe(false);
+		terminal.emitInput("\x1b[5~");
+		await waitFor(() => frameText(terminal).includes("┃ You  alpha"));
+		const oldestLines = logLines(frameText(terminal));
+		expect(oldestLines.some((line) => previousLines.includes(line))).toBe(false);
+		terminal.emitInput("/exit");
+		terminal.emitInput("\n");
+		await expect(exit).resolves.toBe(0);
+	});
+
 	it("supports input history navigation and clear command", async () => {
 		const terminal = new FakeTerminal();
 		const mode = new InteractiveMode({
@@ -278,7 +313,7 @@ describe("InteractiveMode", () => {
 		terminal.emitInput("\n");
 		await waitFor(() => frameText(terminal).includes("STATS OVERVIEW") && frameText(terminal).includes("MODEL LATENCY"));
 		expect(frameText(terminal)).toContain("view: stats");
-		terminal.emitInput("/trace");
+		terminal.emitInput("/trace-page");
 		terminal.emitInput("\n");
 		await waitFor(() => frameText(terminal).includes("TRACE EVENTS") && frameText(terminal).includes("model_response"));
 		expect(frameText(terminal)).toContain("view: trace");
@@ -290,6 +325,10 @@ describe("InteractiveMode", () => {
 		await expect(exit).resolves.toBe(0);
 	});
 });
+
+function logLines(frame: string): string[] {
+	return frame.split("\n").filter((line) => line.startsWith("┃") || line.startsWith("┆") || line.startsWith("·") || line.startsWith("!"));
+}
 
 function defer<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
 	let resolve!: (value: T | PromiseLike<T>) => void;

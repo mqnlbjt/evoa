@@ -3,6 +3,7 @@ import { handleSlashCommand } from "../src/tui/slash-commands.js";
 import { TuiState } from "../src/tui/state.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { ChatServiceContext } from "../src/cli/chat-service.js";
+import type { TraceEvent } from "../src/runtime/events.js";
 
 describe("slash commands", () => {
 	it("handles help clear status tools memory trace and exit", async () => {
@@ -16,7 +17,8 @@ describe("slash commands", () => {
 		expect((await handleSlashCommand("/memory", context)).message).toContain("disabled");
 		expect((await handleSlashCommand("/stats", context)).message).toBeUndefined();
 		expect(state.snapshot().activeView).toBe("stats");
-		expect((await handleSlashCommand("/trace", context)).message).toBeUndefined();
+		expect((await handleSlashCommand("/trace", context)).message).toBe("No trace events");
+		expect((await handleSlashCommand("/trace-page", context)).message).toBeUndefined();
 		expect(state.snapshot().activeView).toBe("trace");
 		expect((await handleSlashCommand("/chat", context)).message).toBeUndefined();
 		expect(state.snapshot().activeView).toBe("chat");
@@ -26,7 +28,24 @@ describe("slash commands", () => {
 		expect(exit.exit).toBe(true);
 		expect(stopped).toBe(true);
 	});
+
+	it("shows recent trace events with bounded limits", async () => {
+		const state = new TuiState({ agentName: "Agent", agentId: "agent", model: "model", provider: "provider", toolProfile: "coding", cwd: ".", sessionId: "session" });
+		const context = { state, chat: fakeChat(), stop: () => undefined };
+		for (let index = 1; index <= 60; index += 1) state.applyTraceEvent(traceEvent(index));
+
+		expect((await handleSlashCommand("/trace 2", context)).message).toContain("e59");
+		expect((await handleSlashCommand("/trace 2", context)).message).toContain("e60");
+		expect((await handleSlashCommand("/trace 2", context)).message).not.toContain("e58");
+		expect((await handleSlashCommand("/trace 0", context)).message).toContain("e51");
+		expect((await handleSlashCommand("/trace 100", context)).message).not.toContain("e10");
+		expect((await handleSlashCommand("/trace 100", context)).message).toContain("e11");
+	});
 });
+
+function traceEvent(index: number): TraceEvent {
+	return { id: `e${index}`, type: "model_request", timestamp: index, agentId: "agent", taskId: "task", payload: { turn: index, text: `payload ${index}` } };
+}
 
 function fakeChat(): ChatServiceContext {
 	return {

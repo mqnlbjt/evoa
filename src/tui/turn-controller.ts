@@ -1,0 +1,74 @@
+import type { ChatServiceContext } from "../cli/chat-service.js";
+import { runChatTurn } from "../cli/chat-service.js";
+import type { TuiState } from "./state.js";
+import { handleSlashCommand } from "./slash-commands.js";
+import type { TuiView } from "./types.js";
+
+export interface TuiTurnControllerOptions {
+	chat: ChatServiceContext;
+	state: TuiState;
+	onRenderRequested: () => void;
+	onStopRequested: () => void;
+	onViewChanged: (view: TuiView) => void;
+}
+
+export class TuiTurnController {
+	private busy = false;
+	private busyNoticeShown = false;
+
+	constructor(private readonly options: TuiTurnControllerOptions) {}
+
+	isBusy(): boolean {
+		return this.busy;
+	}
+
+	cancelInput(): void {
+		this.options.state.addSystemMessage("Input cancelled");
+		this.options.onRenderRequested();
+	}
+
+	async submit(input: string): Promise<void> {
+		if (!input) {
+			this.options.onRenderRequested();
+			return;
+		}
+		if (input.startsWith("/")) {
+			await this.submitSlashCommand(input);
+			return;
+		}
+		await this.submitTurn(input);
+	}
+
+	private async submitSlashCommand(input: string): Promise<void> {
+		const beforeView = this.options.state.snapshot().activeView;
+		const result = await handleSlashCommand(input, { state: this.options.state, chat: this.options.chat, stop: this.options.onStopRequested });
+		const afterView = this.options.state.snapshot().activeView;
+		if (beforeView !== afterView) this.options.onViewChanged(afterView);
+		if (result.message) this.options.state.addSystemMessage(result.message);
+		this.options.onRenderRequested();
+	}
+
+	private async submitTurn(input: string): Promise<void> {
+		if (this.busy) {
+			if (!this.busyNoticeShown) this.options.state.addSystemMessage("A turn is already running");
+			this.busyNoticeShown = true;
+			this.options.onRenderRequested();
+			return;
+		}
+		this.busy = true;
+		this.busyNoticeShown = false;
+		this.options.onViewChanged("chat");
+		this.options.state.addUserMessage(input);
+		this.options.onRenderRequested();
+		try {
+			await runChatTurn(this.options.chat, input);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (!this.options.state.hasErrorMessage(message)) this.options.state.addError(message);
+		} finally {
+			this.busy = false;
+			this.busyNoticeShown = false;
+			this.options.onRenderRequested();
+		}
+	}
+}

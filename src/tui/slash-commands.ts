@@ -33,7 +33,8 @@ export async function handleSlashCommand(input: string, context: SlashCommandCon
 	if (name === "/chat") return switchView(context, "chat");
 	if (name === "/tools") return message(toolsText(context));
 	if (name === "/memory") return message(memoryText(context));
-	if (name === "/trace") return switchView(context, "trace");
+	if (name === "/trace") return message(traceText(context, args));
+	if (name === "/trace-page") return switchView(context, "trace");
 	return message(`Unknown command: ${name}\nType /help for commands.`);
 }
 
@@ -56,7 +57,9 @@ function helpText(): string {
 		"/chat    Show chat page",
 		"/tools   List available tools",
 		"/memory  Show memory status",
-		"/trace   Show trace page",
+		"/trace   Show recent trace events",
+		"/trace N Show recent N trace events (max 50)",
+		"/trace-page Show trace page",
 	].join("\n");
 }
 
