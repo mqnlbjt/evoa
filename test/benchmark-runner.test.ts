@@ -179,9 +179,9 @@ describe("BenchmarkRunner", () => {
 		expect(result.runs[0]?.errorMessage).toBe("runtime timed out after 50ms");
 	});
 
-	it("records aborted runs as errored runs", async () => {
+	it("records aborted runs as interrupted runs", async () => {
 		const controller = new AbortController();
-		controller.abort();
+		controller.abort(new Error("User interrupted"));
 		const runner = new BenchmarkRunner({
 			runtime: new FakeRuntime({ "general-pass": "pass" }),
 			grader: exactGrader,
@@ -191,10 +191,11 @@ describe("BenchmarkRunner", () => {
 
 		const run = await runner.runTask(baselineAgent, tasks[0]!, controller.signal);
 
-		expect(run.status).toBe("errored");
+		expect(run.status).toBe("interrupted");
 		expect(run.errorMessage).toBe("aborted");
 		expect(run.score).toMatchObject({ score: 0, passed: false, reason: "aborted" });
-		expect(run.trace.map((event) => event.type)).toEqual(["run_start", "error", "score", "run_end"]);
+		expect(run.trace.map((event) => event.type)).toEqual(["run_start", "interrupted", "score", "run_end"]);
+		expect(run.trace.at(-1)?.payload).toMatchObject({ status: "interrupted" });
 	});
 
 	it("creates a leaderboard ordered by pass rate, score, then duration", async () => {

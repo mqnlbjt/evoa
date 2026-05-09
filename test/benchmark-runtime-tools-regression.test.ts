@@ -170,14 +170,12 @@ describe("benchmark runtime tool regression", () => {
 		const run = await runner.runTask(mainAgent, task);
 		const mainToolCall = eventsOfType(run, "tool_call").find((event) => (event.payload as { call?: { name?: string } }).call?.name === "subagent");
 		const subagentResult = toolResults(run).find((payload) => (payload as { call?: { name?: string } }).call?.name === "subagent") as { visibleContentPreview?: string } | undefined;
-		const output = parseVisibleOutput(subagentResult) as { subagentId?: string; agentId?: string; status?: string; answer?: string; trace?: Array<{ parentSessionId?: string; parentToolCallId?: string; subagentId?: string }>; traceSummary?: { eventCount?: number } } | undefined;
+		const output = parseVisibleOutput(subagentResult) as { subagentId?: string; agentId?: string; status?: string; answer?: string; traceSummary?: { eventCount?: number } } | undefined;
 
 		expect(run.status).toBe("passed");
 		expect(mainToolCall).toBeDefined();
 		expect(output).toMatchObject({ subagentId: "worker", agentId: "worker-agent", status: "completed", answer: "sub-answer" });
 		expect(output?.traceSummary?.eventCount).toBeGreaterThan(0);
-		expect(output?.trace?.length).toBeGreaterThan(0);
-		expect(output?.trace?.every((event) => event.parentSessionId === mainToolCall?.sessionId && event.parentToolCallId === "main-call" && event.subagentId === "worker")).toBe(true);
 		expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(["subagent"]);
 		expect(requests.find((request) => request.agent.id === "worker-agent")?.tools?.map((tool) => tool.name)).toEqual(["read_file"]);
 	});

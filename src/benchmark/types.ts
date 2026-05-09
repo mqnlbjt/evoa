@@ -1,5 +1,28 @@
 import type { AgentSpec, TaskSpec, TaskType } from "../specs.js";
 import type { TraceEvent } from "../runtime/events.js";
+import type { ModelClient } from "../models/types.js";
+
+export interface RubricCriterion {
+	description: string;
+	weight?: number;
+	required?: boolean;
+}
+
+export interface RubricCriteriaConfig {
+	criteria: RubricCriterion[];
+	passThreshold?: number;
+}
+
+export interface LlmJudgeConfig {
+	criteria: string;
+	passThreshold?: number;
+	instructions?: string;
+	modelAlias?: string;
+}
+
+export interface TaskGraderOptions {
+	modelClient: ModelClient | undefined;
+}
 
 export interface ScoreResult {
 	score: number;
@@ -13,7 +36,7 @@ export interface AgentTaskRunResult {
 	runId: string;
 	agent: AgentSpec;
 	task: TaskSpec;
-	status: "passed" | "failed" | "errored" | "timeout";
+	status: "passed" | "failed" | "errored" | "timeout" | "interrupted";
 	score: ScoreResult;
 	startedAt: number;
 	endedAt: number;
@@ -44,6 +67,7 @@ export interface BenchmarkSummary {
 	failedTasks: number;
 	erroredTasks: number;
 	timeoutTasks: number;
+	interruptedTasks: number;
 	passRate: number;
 	totalScore: number;
 	maxScore: number;

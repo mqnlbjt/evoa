@@ -1,7 +1,7 @@
 import type { AgentSpec, TaskSpec } from "../specs.js";
 import type { RunStore } from "../sessions/run-store.js";
 import type { TraceEvent } from "../runtime/events.js";
-import { isRuntimeTimeoutError } from "../runtime/timeout.js";
+import { abortMessage, abortReason, isAbortError, isRuntimeTimeoutError } from "../runtime/timeout.js";
 import type {
 	AgentRuntimeExecutor,
 	AgentTaskRunResult,
@@ -78,14 +78,15 @@ export class BenchmarkRunner {
 			status = score.passed ? "passed" : "failed";
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
-			status = isRuntimeTimeoutError(error) ? "timeout" : errorMessage.toLowerCase().includes("timeout") ? "timeout" : "errored";
+			status = runErrorStatus(error, errorMessage, signal);
 			score = {
 				score: 0,
 				maxScore: task.scoring.maxScore ?? 1,
 				passed: false,
 				reason: errorMessage,
 			};
-			trace.push(this.event("error", agent, task, { message: errorMessage }));
+			if (status === "interrupted") trace.push(this.event("interrupted", agent, task, { reason: abortReason(signal), message: abortMessage(error, signal) }));
+			else trace.push(this.event("error", agent, task, { message: errorMessage }));
 		}
 
 		const endedAt = this.now();
@@ -125,6 +126,12 @@ export class BenchmarkRunner {
 	}
 }
 
+function runErrorStatus(error: unknown, errorMessage: string, signal?: AbortSignal): AgentTaskRunResult["status"] {
+	if (isRuntimeTimeoutError(error) || errorMessage.toLowerCase().includes("timeout")) return "timeout";
+	if (isAbortError(error, signal)) return "interrupted";
+	return "errored";
+}
+
 export function summarizeRuns(runs: AgentTaskRunResult[]): BenchmarkSummary {
 	const maxScore = runs.reduce((sum, run) => sum + run.score.maxScore, 0);
 	const totalScore = runs.reduce((sum, run) => sum + run.score.score, 0);
@@ -132,6 +139,7 @@ export function summarizeRuns(runs: AgentTaskRunResult[]): BenchmarkSummary {
 	const failedTasks = runs.filter((run) => run.status === "failed").length;
 	const erroredTasks = runs.filter((run) => run.status === "errored").length;
 	const timeoutTasks = runs.filter((run) => run.status === "timeout").length;
+	const interruptedTasks = runs.filter((run) => run.status === "interrupted").length;
 	const byTaskType: BenchmarkSummary["byTaskType"] = {};
 
 	for (const run of runs) {
@@ -151,6 +159,7 @@ export function summarizeRuns(runs: AgentTaskRunResult[]): BenchmarkSummary {
 		failedTasks,
 		erroredTasks,
 		timeoutTasks,
+		interruptedTasks,
 		passRate: runs.length === 0 ? 0 : passedTasks / runs.length,
 		totalScore,
 		maxScore,

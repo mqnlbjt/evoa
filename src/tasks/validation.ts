@@ -32,6 +32,31 @@ function validateScoring(value: unknown): asserts value is TaskScoringSpec {
 		throw new Error("scoring.maxScore must be a positive number");
 	}
 	if (value.config !== undefined && !isRecord(value.config)) throw new Error("scoring.config must be an object");
+	validateScoringConfig(value.method as TaskScoringSpec["method"], value.config);
+}
+
+function validateScoringConfig(method: TaskScoringSpec["method"], config: Record<string, unknown> | undefined): void {
+	switch (method) {
+		case "exact": {
+			if (!config || typeof config.expected !== "string") throw new Error("exact scoring requires config.expected string");
+			break;
+		}
+		case "rubric": {
+			if (!config) throw new Error("rubric scoring requires config");
+			const hasContains = Array.isArray(config.contains) && config.contains.every((item): item is string => typeof item === "string");
+			const hasCriteria = Array.isArray(config.criteria) && config.criteria.length > 0 && config.criteria.every((c): c is Record<string, unknown> => isRecord(c) && typeof c.description === "string");
+			if (!hasContains && !hasCriteria) throw new Error("rubric scoring requires config.contains (string array) or config.criteria (array of { description: string })");
+			break;
+		}
+		case "llm-judge": {
+			if (!config || typeof config.criteria !== "string" || config.criteria.trim().length === 0) throw new Error("llm-judge scoring requires config.criteria non-empty string");
+			if (config.passThreshold !== undefined && (typeof config.passThreshold !== "number" || config.passThreshold < 0 || config.passThreshold > 1)) {
+				throw new Error("scoring.config.passThreshold must be a number between 0 and 1");
+			}
+			if (config.modelAlias !== undefined && typeof config.modelAlias !== "string") throw new Error("scoring.config.modelAlias must be a string");
+			break;
+		}
+	}
 }
 
 function validateFixtures(value: unknown): void {

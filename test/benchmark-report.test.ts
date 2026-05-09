@@ -54,6 +54,7 @@ const result: SuiteRunResult = {
 		failedTasks: 0,
 		erroredTasks: 1,
 		timeoutTasks: 0,
+		interruptedTasks: 0,
 		passRate: 0.5,
 		totalScore: 1,
 		maxScore: 2,

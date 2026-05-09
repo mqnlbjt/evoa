@@ -123,7 +123,7 @@ export function formatBenchmarkReportMarkdown(report: BenchmarkReport): string {
 		"",
 		"## Summary",
 		"",
-		`- Tasks: ${report.summary.passedTasks} passed, ${report.summary.failedTasks} failed, ${report.summary.erroredTasks} errored, ${report.summary.timeoutTasks} timeout`,
+		`- Tasks: ${report.summary.passedTasks} passed, ${report.summary.failedTasks} failed, ${report.summary.erroredTasks} errored, ${report.summary.timeoutTasks} timeout, ${report.summary.interruptedTasks} interrupted`,
 		`- Pass rate: ${formatPercent(report.summary.passRate)}`,
 		`- Score: ${report.summary.totalScore}/${report.summary.maxScore}`,
 		`- Average score: ${formatNumber(report.summary.averageScore)}`,
@@ -140,7 +140,7 @@ export function formatBenchmarkReportMarkdown(report: BenchmarkReport): string {
 		lines.push("", "## Subagent Traces", "", "| Task | Subagent | Events | Tool Calls | Errors |", "| --- | --- | ---: | ---: | ---: |",
 			...subagentRows.map((row) => `| ${escapeTable(row[0]!)} | ${escapeTable(row[1]!)} | ${row[2]} | ${row[3]} | ${row[4]} |`));
 	}
-	const failures = report.tasks.filter((task) => task.errorMessage || task.status === "errored" || task.status === "timeout");
+	const failures = report.tasks.filter((task) => task.errorMessage || task.status === "errored" || task.status === "timeout" || task.status === "interrupted");
 	if (failures.length > 0) {
 		lines.push("", "## Errors", "");
 		for (const task of failures) {
