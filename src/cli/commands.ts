@@ -3,9 +3,10 @@ import path, { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { loadAgentDefinitionsFromFile } from "../agents/loader.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
+import type { FollowUpMessageProvider } from "../runtime/loop.js";
 import { BenchmarkRunner } from "../benchmark/runner.js";
 import { loadBenchmarkSuiteFromFile } from "../benchmark/loader.js";
-import { MinimalTaskGrader } from "../benchmark/grader.js";
+import { CompositeTaskGrader } from "../benchmark/grader.js";
 import { createBenchmarkReport, formatBenchmarkReportMarkdown } from "../benchmark/report.js";
 import { BenchmarkEvolutionEngine } from "../evolution/engine.js";
 import { JsonlEvolutionHistoryStore } from "../evolution/history-store.js";
@@ -26,6 +27,7 @@ import type { Terminal } from "../tui/terminal.js";
 import { createToolRegistryForProfileAsync } from "../tools/profiles.js";
 import { replayTraceSource } from "../replay/trace-replay.js";
 import { createAgentSession, appendUserMessage, entriesFromMessages, type AgentSession, type SessionEntry } from "../runtime/session.js";
+import { isAbortError } from "../runtime/timeout.js";
 import type { ModelClient, ModelMessage } from "../models/types.js";
 import { JsonSessionStore } from "../sessions/json-session-store.js";
 import { JsonMemoryStore } from "../memory/json-memory-store.js";
@@ -104,7 +106,7 @@ export async function handleRun(command: RunCommand, deps: CliDeps): Promise<Cli
 	const result = await runner.runTask(agent, task);
 	const json = runJson(command.kind, result);
 	return {
-		exitCode: result.status === "errored" || result.status === "timeout" ? 1 : 0,
+		exitCode: result.status === "errored" || result.status === "timeout" || result.status === "interrupted" ? 1 : 0,
 		json,
 		trace: result,
 		human: formatRunHuman(result),
@@ -212,19 +214,33 @@ interface ChatContext {
 async function handleChatRepl(command: ChatCommand, deps: CliDeps): Promise<CliResult> {
 	const context = await createChatContext(command, deps);
 	const stdout = deps.stdout ?? process.stdout;
-	const { inputLines, close } = createChatInput(deps);
+	const { inputLines, close, onSigint } = createChatInput(deps);
+	let activeTurnController: AbortController | undefined;
+	const unsubscribeSigint = onSigint?.(() => {
+		if (activeTurnController) activeTurnController.abort(new Error("User interrupted"));
+		else close?.();
+	});
 	try {
 		stdout.write("> ");
 		for await (const line of inputLines) {
 			const input = line.trim();
 			if (input === "/exit" || input === "/quit") break;
 			if (input) {
-				const output = await runChatTurn(context, input);
-				stdout.write(`${output.answer}\n`);
+				activeTurnController = new AbortController();
+				try {
+					const output = await runChatTurn(context, input, activeTurnController.signal);
+					stdout.write(`${output.answer}\n`);
+				} catch (error) {
+					if (!isAbortError(error, activeTurnController.signal)) throw error;
+					stdout.write("Interrupted\n");
+				} finally {
+					activeTurnController = undefined;
+				}
 			}
 			stdout.write("> ");
 		}
 	} finally {
+		unsubscribeSigint?.();
 		close?.();
 		await context.runtime.close();
 	}
@@ -261,11 +277,11 @@ async function createChatContext(command: ChatCommand, deps: CliDeps): Promise<C
 	};
 }
 
-async function runChatTurn(context: ChatContext, prompt: string): Promise<{ answer: string; trace: NonNullable<Awaited<ReturnType<AgentRuntime["runSession"]>>["trace"]> }> {
+async function runChatTurn(context: ChatContext, prompt: string, signal?: AbortSignal): Promise<{ answer: string; trace: NonNullable<Awaited<ReturnType<AgentRuntime["runSession"]>>["trace"]> }> {
 	const startMessageIndex = context.messages.length;
 	const session = createAgentSession({ id: context.sessionId, agent: context.agent, task: chatTask(context.command, prompt), entries: context.entries });
 	appendUserMessage(session, prompt);
-	const output = await context.runtime.runSession(session);
+	const output = await context.runtime.runSession(session, signal);
 	context.messages = session.messages;
 	context.entries = session.entries ?? entriesFromMessages(session.messages);
 	await context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: memoryProjectId(context.command), messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId });
@@ -358,16 +374,24 @@ function resolveToolProfile(command: ChatCommand, stored: StoredAgentSession | u
 	return stored?.startupContext?.toolProfile ?? command.toolProfile;
 }
 
-function createChatInput(deps: CliDeps): { inputLines: AsyncIterable<string>; close?: () => void } {
+function createChatInput(deps: CliDeps): { inputLines: AsyncIterable<string>; close?: () => void; onSigint?: (handler: () => void) => () => void } {
 	if (deps.inputLines) return { inputLines: deps.inputLines };
 	const input = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-	return { inputLines: input, close: () => input.close() };
+	return {
+		inputLines: input,
+		close: () => input.close(),
+		onSigint: (handler) => {
+			input.on("SIGINT", handler);
+			return () => input.off("SIGINT", handler);
+		},
+	};
 }
 
 async function createRunner(command: RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = [], agent?: AgentSpec): Promise<BenchmarkRunner> {
+	const modelClient = agent ? createRoutedModelClient(command, deps, agent) : undefined;
 	return new BenchmarkRunner({
-		runtime: await createRuntime(command, deps, subagents, undefined, agent ? createRoutedModelClient(command, deps, agent) : undefined),
-		grader: new MinimalTaskGrader(),
+		runtime: await createRuntime(command, deps, subagents, undefined, modelClient),
+		grader: new CompositeTaskGrader({ modelClient }),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
 	});
@@ -384,7 +408,28 @@ async function createRuntime(command: ResolvedChatCommand | RunCommand | Benchma
 		...(subagents.length > 0 ? { subagents } : {}),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
+		...(command.kind === "chat" ? { getFollowUpMessages: createAutoContinueFollowUpProvider() } : {}),
 	});
+}
+
+const autoContinueFollowUp = "Continue the task if it is not complete. Do not explain that you are continuing; call the necessary tools or give the final answer only when complete.";
+const interruptedProgressPhrases = ["let me", "i’ll check", "i will check", "i’ll check", "i need to", "found the issue"];
+const completionPhrases = ["done", "completed", "fixed"];
+
+function createAutoContinueFollowUpProvider(): FollowUpMessageProvider {
+	return (session, response) => {
+		if (!looksLikeInterruptedProgress(response.text?.trim() ?? "")) return [];
+		if (session.messages.filter((message) => message.role === "user" && message.content === autoContinueFollowUp).length >= 2) return [];
+		return [{ role: "user", content: autoContinueFollowUp, contentBlocks: [{ type: "text", text: autoContinueFollowUp }] }];
+	};
+}
+
+function looksLikeInterruptedProgress(text: string): boolean {
+	if (!text) return false;
+	const normalized = text.toLowerCase();
+	if (completionPhrases.some((phrase) => normalized.includes(phrase))) return false;
+	if (/[:：]\s*$/.test(text)) return true;
+	return interruptedProgressPhrases.some((phrase) => normalized.includes(phrase));
 }
 
 async function createCommandToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): Promise<ToolRegistry> {
@@ -597,7 +642,7 @@ function formatBenchmarkHuman(result: SuiteRunResult): string {
 	const rows = [["TASK", "STATUS", "SCORE"], ...result.runs.map((run) => [run.task.id, run.status, `${run.score.score}/${run.score.maxScore}`])];
 	return [
 		`Suite ${result.suite.id} completed for agent ${result.agent.id}`,
-		`Tasks: ${result.summary.passedTasks} passed, ${result.summary.failedTasks} failed, ${result.summary.erroredTasks} errored, ${result.summary.timeoutTasks} timeout`,
+		`Tasks: ${result.summary.passedTasks} passed, ${result.summary.failedTasks} failed, ${result.summary.erroredTasks} errored, ${result.summary.timeoutTasks} timeout, ${result.summary.interruptedTasks} interrupted`,
 		`Pass rate: ${formatPercent(result.summary.passRate)}`,
 		`Score: ${result.summary.totalScore}/${result.summary.maxScore}`,
 		"",
