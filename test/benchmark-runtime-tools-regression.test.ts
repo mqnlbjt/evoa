@@ -169,8 +169,8 @@ describe("benchmark runtime tool regression", () => {
 
 		const run = await runner.runTask(mainAgent, task);
 		const mainToolCall = eventsOfType(run, "tool_call").find((event) => (event.payload as { call?: { name?: string } }).call?.name === "subagent");
-		const subagentResult = toolResults(run).find((payload) => (payload as { call?: { name?: string } }).call?.name === "subagent") as { output?: unknown } | undefined;
-		const output = subagentResult?.output as { subagentId?: string; agentId?: string; status?: string; answer?: string; trace?: Array<{ parentSessionId?: string; parentToolCallId?: string; subagentId?: string }>; traceSummary?: { eventCount?: number } } | undefined;
+		const subagentResult = toolResults(run).find((payload) => (payload as { call?: { name?: string } }).call?.name === "subagent") as { visibleContentPreview?: string } | undefined;
+		const output = parseVisibleOutput(subagentResult) as { subagentId?: string; agentId?: string; status?: string; answer?: string; trace?: Array<{ parentSessionId?: string; parentToolCallId?: string; subagentId?: string }>; traceSummary?: { eventCount?: number } } | undefined;
 
 		expect(run.status).toBe("passed");
 		expect(mainToolCall).toBeDefined();
@@ -277,6 +277,10 @@ function eventTypes(run: AgentTaskRunResult): string[] {
 
 function toolResults(run: AgentTaskRunResult): unknown[] {
 	return eventsOfType(run, "tool_result").map((event) => event.payload);
+}
+
+function parseVisibleOutput(payload: { visibleContentPreview?: string } | undefined): unknown {
+	return payload?.visibleContentPreview ? JSON.parse(payload.visibleContentPreview) : undefined;
 }
 
 function createIds(): () => string {

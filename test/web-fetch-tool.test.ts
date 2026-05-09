@@ -83,11 +83,34 @@ describe("web_fetch tool", () => {
 	});
 
 	it("allows same-origin redirects and rejects cross-origin redirects", async () => {
-		const sameOrigin = createWebFetchTool({ fetch: mockFetch(textResponse("ok", { url: "https://example.com/final" })) });
-		const crossOrigin = createWebFetchTool({ fetch: mockFetch(textResponse("no", { url: "https://evil.example/final" })) });
+		const sameOriginTool = createWebFetchTool({
+			fetch: sequenceFetch([
+				textResponse("", { status: 301, location: "https://example.com/final" }),
+				textResponse("ok"),
+			]),
+		});
+		const crossOriginTool = createWebFetchTool({
+			fetch: sequenceFetch([
+				textResponse("", { status: 301, location: "https://evil.example/final" }),
+			]),
+		});
 
-		await expect(sameOrigin.execute({ url: "https://example.com/start" })).resolves.toMatchObject({ finalUrl: "https://example.com/final" });
-		await expect(crossOrigin.execute({ url: "https://example.com/start" })).rejects.toThrow("Cross-origin redirects are not allowed");
+		await expect(sameOriginTool.execute({ url: "https://example.com/start" })).resolves.toMatchObject({ finalUrl: "https://example.com/final" });
+		await expect(crossOriginTool.execute({ url: "https://example.com/start" })).rejects.toThrow("Cross-origin redirects are not allowed");
+	});
+
+	it("rejects localhost and internal IP addresses", async () => {
+		const tool = createWebFetchTool({ fetch: mockFetch(textResponse("never")) });
+
+		await expect(tool.execute({ url: "http://localhost/" })).rejects.toThrow("Access to localhost is not allowed");
+		await expect(tool.execute({ url: "http://localhost:8080/path" })).rejects.toThrow("Access to localhost is not allowed");
+		await expect(tool.execute({ url: "http://127.0.0.1/" })).rejects.toThrow("Access to 127.0.0.1 is not allowed");
+		await expect(tool.execute({ url: "http://[::1]/" })).rejects.toThrow("Access to ::1 is not allowed");
+		await expect(tool.execute({ url: "http://10.0.0.1/" })).rejects.toThrow("Access to 10.0.0.1 is not allowed");
+		await expect(tool.execute({ url: "http://172.16.0.1/" })).rejects.toThrow("Access to 172.16.0.1 is not allowed");
+		await expect(tool.execute({ url: "http://192.168.1.1/" })).rejects.toThrow("Access to 192.168.1.1 is not allowed");
+		await expect(tool.execute({ url: "http://169.254.1.1/" })).rejects.toThrow("Access to 169.254.1.1 is not allowed");
+		await expect(tool.execute({ url: "http://169.254.169.254/" })).rejects.toThrow("Access to 169.254.169.254 is not allowed");
 	});
 
 	it("is included in read-only and dangerous profiles", async () => {
@@ -103,20 +126,32 @@ function mockFetch(response: FetchResponseLike): FetchLike {
 	return async () => response;
 }
 
+function sequenceFetch(responses: FetchResponseLike[]): FetchLike {
+	let index = 0;
+	return async () => {
+		const response = responses[index] ?? responses[responses.length - 1];
+		if (index < responses.length) index += 1;
+		return response!;
+	};
+}
+
 function htmlResponse(body: string): FetchResponseLike {
 	return response(body, { contentType: "text/html" });
 }
 
-function textResponse(body: string, options: Partial<FetchResponseLike> & { contentType?: string } = {}): FetchResponseLike {
+function textResponse(body: string, options: Partial<FetchResponseLike> & { contentType?: string; location?: string } = {}): FetchResponseLike {
 	return response(body, { contentType: "text/plain", ...options });
 }
 
-function response(body: string, options: Partial<FetchResponseLike> & { contentType?: string } = {}): FetchResponseLike {
+function response(body: string, options: Partial<FetchResponseLike> & { contentType?: string; location?: string } = {}): FetchResponseLike {
+	const headers: Record<string, string> = {};
+	if (options.contentType) headers["content-type"] = options.contentType;
+	if (options.location) headers["location"] = options.location;
 	return {
 		status: options.status ?? 200,
 		statusText: options.statusText ?? "OK",
 		url: options.url ?? "https://example.com/page",
-		headers: new HeadersLike(options.contentType ? { "content-type": options.contentType } : {}),
+		headers: new HeadersLike(headers),
 		async text() {
 			return body;
 		},

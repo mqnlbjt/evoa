@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { verifyEvolutionComparison } from "../src/verification/verifier.js";
 import type { AgentTaskRunResult, SuiteRunResult } from "../src/benchmark/types.js";
+import type { TraceEvent } from "../src/runtime/events.js";
 import type { AgentSpec, TaskSpec } from "../src/specs.js";
 
 const agent: AgentSpec = {
@@ -47,7 +48,49 @@ describe("verifyEvolutionComparison", () => {
 		expect(report.issues[0]).toMatchObject({ type: "memory-regression", severity: "blocking" });
 	});
 
-	it("reports denied tool policy events", () => {
+	it("blocks on compaction circuit breaker", () => {
+			const report = verifyEvolutionComparison(
+				suite(run("passed")),
+				suite({
+					...run("passed"),
+					trace: makeEvent("context_compaction", { reason: "circuit_breaker" }),
+				}),
+			);
+
+			expect(report.verdict).toBe("fail");
+			expect(report.blocking).toBe(true);
+			expect(report.issues[0]).toMatchObject({ type: "compaction-failure", severity: "blocking" });
+		});
+
+		it("warns on compaction failure", () => {
+			const report = verifyEvolutionComparison(
+				suite(run("passed")),
+				suite({
+					...run("passed"),
+					trace: makeEvent("context_compaction", { reason: "failed", failure: "model error" }),
+				}),
+			);
+
+			expect(report.verdict).toBe("partial");
+			expect(report.blocking).toBe(false);
+			expect(report.issues[0]).toMatchObject({ type: "compaction-failure", severity: "warning" });
+		});
+
+		it("warns on untrimmable context", () => {
+			const report = verifyEvolutionComparison(
+				suite(run("passed")),
+				suite({
+					...run("passed"),
+					trace: makeEvent("context_trim", { reason: "untrimmable", tokenEstimateAfter: 100_000 }),
+				}),
+			);
+
+			expect(report.verdict).toBe("partial");
+			expect(report.blocking).toBe(false);
+			expect(report.issues[0]).toMatchObject({ type: "context-untrimmable", severity: "warning" });
+		});
+
+		it("reports denied tool policy events", () => {
 		const report = verifyEvolutionComparison(
 			suite(run("failed")),
 			suite({
@@ -59,8 +102,8 @@ describe("verifyEvolutionComparison", () => {
 						timestamp: 1,
 						agentId: "agent",
 						taskId: "task",
-						payload: { decision: { decision: "deny", reason: "denied" } },
-					},
+						payload: { call: { id: "c1", name: "test" }, decision: { decision: "deny", reason: "denied" }, status: "denied", visibleContentPreview: "denied" },
+					} as TraceEvent,
 				],
 			}),
 		);
@@ -104,4 +147,8 @@ function run(status: AgentTaskRunResult["status"]): AgentTaskRunResult {
 		durationMs: 1,
 		trace: [],
 	};
+}
+
+function makeEvent(type: TraceEvent["type"], overrides: Record<string, unknown>): TraceEvent[] {
+	return [{ id: "event", type, timestamp: 1, agentId: "agent", taskId: "task", payload: overrides } as TraceEvent];
 }

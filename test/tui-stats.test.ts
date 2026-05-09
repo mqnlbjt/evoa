@@ -69,5 +69,5 @@ describe("TuiStatsAccumulator", () => {
 });
 
 function event(type: TraceEvent["type"], payload: unknown, timestamp = 1): TraceEvent {
-	return { id: `${type}-${timestamp}`, type, timestamp, agentId: "agent", taskId: "task", sessionId: "session", payload };
+	return { id: `${type}-${timestamp}`, type, timestamp, agentId: "agent", taskId: "task", sessionId: "session", payload } as TraceEvent;
 }

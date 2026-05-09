@@ -108,5 +108,5 @@ describe("TuiState", () => {
 });
 
 function event(type: TraceEvent["type"], payload: unknown): TraceEvent {
-	return { id: `event-${type}`, type, timestamp: 1, agentId: "agent", taskId: "task", sessionId: "session", payload };
+	return { id: `event-${type}`, type, timestamp: 1, agentId: "agent", taskId: "task", sessionId: "session", payload } as TraceEvent;
 }

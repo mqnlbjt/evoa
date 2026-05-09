@@ -33,7 +33,7 @@ describe("stdio MCP client smoke", () => {
 					type: "tool_result",
 					payload: expect.objectContaining({
 						status: "success",
-						output: expect.objectContaining({ content: [{ type: "text", text: "hi from runtime" }] }),
+						visibleContentPreview: expect.stringContaining("hi from runtime"),
 					}),
 				}),
 			]));

@@ -52,8 +52,8 @@ describe("chat tool regression", () => {
 		expect(trace.trace).toEqual(expect.arrayContaining([
 			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "denied", call: expect.objectContaining({ name: "write_file" }) }) }),
 		]));
-		const retryRequest = trace.trace.find((event) => isTraceEvent(event, "model_request") && event.payload.messages.some((message) => message.role === "tool"));
-		expect(retryRequest).toMatchObject({ payload: { messages: expect.arrayContaining([
+		const retryRequest = trace.trace.find((event) => isTraceEvent(event, "model_request") && event.payload.messagesPreview.some((message) => message.role === "tool"));
+		expect(retryRequest).toMatchObject({ payload: { messagesPreview: expect.arrayContaining([
 			expect.objectContaining({ role: "tool", contentBlocks: expect.arrayContaining([expect.objectContaining({ type: "tool_result", isError: true })]) }),
 		]) } });
 	});
@@ -99,7 +99,7 @@ describe("chat tool regression", () => {
 		const trace = await readTrace(traceFile);
 		expect(trace.trace).toEqual(expect.arrayContaining([
 			expect.objectContaining({ type: "tool_call", payload: expect.objectContaining({ call: expect.objectContaining({ name: "web_fetch" }) }) }),
-			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", output: expect.objectContaining({ markdown: "# Fetched" }) }) }),
+			expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", visibleContentPreview: expect.stringContaining("# Fetched"), metadata: expect.objectContaining({ toolOutput: expect.objectContaining({ truncated: false }) }) }) }),
 		]));
 	});
 
@@ -163,7 +163,7 @@ async function writeAgent(filePath: string, allowedTools: string[], deniedTools?
 
 interface TestTraceEvent {
 	type: string;
-	payload: { messages: Array<{ role?: string; contentBlocks?: unknown[] }> };
+	payload: { messagesPreview: Array<{ role?: string; contentBlocks?: unknown[] }> };
 }
 
 function mockFetch(body: string): typeof fetch {
@@ -181,5 +181,5 @@ async function readTrace(filePath: string): Promise<{ trace: unknown[] }> {
 }
 
 function isTraceEvent(event: unknown, type: string): event is TestTraceEvent {
-	return typeof event === "object" && event !== null && "type" in event && event.type === type && "payload" in event && typeof event.payload === "object" && event.payload !== null && "messages" in event.payload && Array.isArray(event.payload.messages);
+	return typeof event === "object" && event !== null && "type" in event && event.type === type && "payload" in event && typeof event.payload === "object" && event.payload !== null && "messagesPreview" in event.payload && Array.isArray(event.payload.messagesPreview);
 }

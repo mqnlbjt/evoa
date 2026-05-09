@@ -58,6 +58,7 @@ function fakeChat(): ChatServiceContext {
 		stored: undefined,
 		sessionId: "session",
 		messages: [],
+		entries: [],
 		now: () => 1,
 		createId: () => "id",
 		toolRegistry: new ToolRegistry([{ name: "echo", description: "Echo", permission: { defaultDecision: "allow", riskLevel: "low" }, concurrency: "parallel-safe", execute: async () => "ok" }]),

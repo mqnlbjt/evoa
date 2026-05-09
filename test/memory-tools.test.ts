@@ -17,7 +17,7 @@ describe("memory tools", () => {
 		await store.append(memory("stable", "默认中文回答", { stable: true }));
 		await store.append(memory("dynamic", "项目使用 TypeScript", { stable: false }));
 		const registry = registryFor(store);
-		const result = await execute(registry, "memory_context", { query: "TypeScript" });
+		const result = await execute(registry, "memory_context", { query: "默认 TypeScript" });
 
 		expect(result.status).toBe("success");
 		expect(result.output).toMatchObject({ stableItemIds: ["stable"], dynamicItemIds: ["dynamic"] });

@@ -148,9 +148,93 @@ describe("MemoryManager", () => {
 		await store.append(memory("stable", "默认中文回答", { stable: true }));
 		await store.append(memory("dynamic", "项目使用 TypeScript", { stable: false }));
 
-		const items = await manager.loadContextItems({ agentId: "agent", sessionId: "s1", prompt: "TypeScript", now: () => 2 });
+		const items = await manager.loadContextItems({ agentId: "agent", sessionId: "s1", prompt: "默认 TypeScript", now: () => 2 });
 		expect(items.stable.map((item) => item.id)).toEqual(["stable"]);
 		expect(items.dynamic.map((item) => item.id)).toEqual(["dynamic"]);
+	});
+
+	it("limits stable memory by token budget without leaking skipped stable items", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("important", "a", { stable: true, priority: 10 }));
+		await store.append(memory("verbose", "b".repeat(120), { stable: true, priority: 1 }));
+
+		const items = await manager.loadContextItems({ agentId: "agent", sessionId: "s1", prompt: "", now: () => 2, maxStableTokens: 42, maxDynamicTokens: 1_000, maxContextTokens: 1_000 });
+		expect(items.stable.map((item) => item.id)).toEqual(["important"]);
+		expect(items.dynamic.map((item) => item.id)).not.toContain("verbose");
+	});
+
+	it("only injects prompt-relevant stable knowledge", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("project", "项目使用 Python", { stable: true }));
+		await store.append(memory("hobby", "黄金山喜欢玩原神", { stable: true }));
+
+		const items = await manager.loadContextItems({ agentId: "agent", sessionId: "s1", prompt: "原神", now: () => 2 });
+		expect(items.stable.map((item) => item.id)).toEqual(["hobby"]);
+	});
+
+	it("keeps doctrine available even when it is not prompt-relevant", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("doctrine", "默认中文回答", {}, { layer: "doctrine" }));
+		await store.append(memory("stable", "项目使用 Python", { stable: true }));
+
+		const items = await manager.loadContextItems({ agentId: "agent", sessionId: "s1", prompt: "原神", now: () => 2 });
+		expect(items.stable.map((item) => item.id)).toEqual(["doctrine"]);
+	});
+
+	it("caps dynamic memory by the remaining total memory budget", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("stable", "anchor", { stable: true, priority: 10 }));
+		await store.append(memory("dynamic", "TypeScript dynamic fact", { stable: false }));
+
+		const items = await manager.loadContextItems({ agentId: "agent", sessionId: "s1", prompt: "anchor TypeScript", now: () => 2, maxStableTokens: 42, maxDynamicTokens: 1_000, maxContextTokens: 42 });
+		expect(items.stable.map((item) => item.id)).toEqual(["stable"]);
+		expect(items.dynamic).toEqual([]);
+	});
+
+	it("ranks rare memory terms above common terms with BM25", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("common", "项目 使用 通用 配置", { stable: false }, { updatedAt: 3 }));
+		await store.append(memory("rare", "项目 使用 zeta-token", { stable: false }, { updatedAt: 1 }));
+
+		const result = await manager.search({ agentId: "agent", sessionId: "s1", prompt: "", query: "项目 zeta-token", now: () => 2 });
+		expect(result.map((item) => item.id).slice(0, 2)).toEqual(["rare", "common"]);
+	});
+
+	it("ranks short precise BM25 matches above long incidental matches", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("long", `原神 ${"噪声 ".repeat(80)}`, { stable: false }, { updatedAt: 3 }));
+		await store.append(memory("short", "原神", { stable: false }, { updatedAt: 1 }));
+
+		const result = await manager.search({ agentId: "agent", sessionId: "s1", prompt: "", query: "原神", now: () => 2 });
+		expect(result.map((item) => item.id).slice(0, 2)).toEqual(["short", "long"]);
+	});
+
+	it("uses Chinese bigrams for BM25 matching", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("hobby", "黄金山喜欢玩原神", { stable: true }));
+		await store.append(memory("project", "项目使用 Python", { stable: true }));
+
+		const items = await manager.loadContextItems({ agentId: "agent", sessionId: "s1", prompt: "黄金山爱好", now: () => 2 });
+		expect(items.stable.map((item) => item.id)).toEqual(["hobby"]);
+	});
+
+	it("keeps deterministic ordering when BM25 has no query terms", async () => {
+		const store = new JsonMemoryStore(await root());
+		const manager = new MemoryManager(store);
+		await store.append(memory("b", "beta", { stable: false }, { updatedAt: 2 }));
+		await store.append(memory("a", "alpha", { stable: false }, { updatedAt: 1 }));
+
+		const first = await manager.search({ agentId: "agent", sessionId: "s1", prompt: "", query: "", now: () => 2 });
+		const second = await manager.search({ agentId: "agent", sessionId: "s1", prompt: "", query: "", now: () => 2 });
+		expect(first.map((item) => item.id)).toEqual(second.map((item) => item.id));
+		expect(first.map((item) => item.id)).toEqual(["b", "a"]);
 	});
 
 	it("searches, reads, updates, and forgets manual memories append-only", async () => {

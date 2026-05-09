@@ -369,7 +369,7 @@ describe("OpenAIModelClient", () => {
 		expect(captured[1]).not.toMatchObject({ prompt_cache_key: expect.anything() });
 	});
 
-	it("uses long prompt cache retention only for official OpenAI base URLs", async () => {
+	it("uses prompt cache params only for official OpenAI base URLs", async () => {
 		const captured: unknown[] = [];
 		const client: OpenAIResponsesClient = {
 			responses: {
@@ -385,7 +385,7 @@ describe("OpenAIModelClient", () => {
 		await new OpenAIModelClient({ client, baseURL: "http://localhost:1234/v1" }).complete({ agent: longAgent, task, turn: 1, sessionId: "session-123", messages: [{ role: "user", content: task.prompt }] });
 
 		expect(captured[0]).toMatchObject({ prompt_cache_key: "session-123", prompt_cache_retention: "24h" });
-		expect(captured[1]).toMatchObject({ prompt_cache_key: "session-123" });
+		expect(captured[1]).not.toMatchObject({ prompt_cache_key: expect.anything() });
 		expect(captured[1]).not.toMatchObject({ prompt_cache_retention: expect.anything() });
 	});
 

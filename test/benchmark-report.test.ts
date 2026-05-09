@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createBenchmarkReport, formatBenchmarkReportMarkdown } from "../src/benchmark/report.js";
 import type { SuiteRunResult } from "../src/benchmark/types.js";
+import type { TraceEvent } from "../src/runtime/events.js";
 
 const result: SuiteRunResult = {
 	suite: {
@@ -32,7 +33,7 @@ const result: SuiteRunResult = {
 			startedAt: 0,
 			endedAt: 5,
 			durationMs: 5,
-			trace: [{ id: "event-pass", type: "run_start", timestamp: 0, agentId: "agent", taskId: "pass", payload: {} }],
+			trace: [{ id: "event-pass", type: "run_start", timestamp: 0, agentId: "agent", taskId: "pass", payload: {} } as TraceEvent],
 		},
 		{
 			runId: "run-fail",
@@ -109,6 +110,9 @@ describe("benchmark reports", () => {
 			agentId: "agent",
 			taskId: "pass",
 			payload: {
+				call: { id: "c1", name: "subagent" },
+				status: "completed",
+				visibleContentPreview: "ok",
 				output: {
 					subagentId: "worker",
 					agentId: "worker-agent",
@@ -119,7 +123,7 @@ describe("benchmark reports", () => {
 					trace: [{ id: "sub-event", type: "tool_call", timestamp: 2, agentId: "worker-agent", taskId: "sub-task", payload: {} }],
 				},
 			},
-		}];
+		} as TraceEvent];
 
 		const report = createBenchmarkReport(withSubagent);
 		const markdown = formatBenchmarkReportMarkdown(report);

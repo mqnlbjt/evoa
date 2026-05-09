@@ -94,7 +94,43 @@ describe("DeterministicCandidateGenerator", () => {
 		expect(await generator.generate(baseline)).toHaveLength(1);
 	});
 
-	it("rejects invalid mutations", () => {
+	it("generates denied tools mutation candidates", async () => {
+			const generator = createDeterministicCandidateGenerator({
+				mutations: [
+					{ id: "deny-write", kind: "denied-tools-add", tools: ["bash"] },
+					{ id: "allow-write", kind: "denied-tools-remove", tools: ["write_file"] },
+				],
+			});
+
+			const candidates = await generator.generate(baseline);
+
+			expect(candidates[0]).toMatchObject({ id: "baseline-candidate-deny-write", kind: "tool", patch: "tools.deniedTools += [bash]" });
+			expect(candidates[0]?.agent.tools.deniedTools).toEqual(["bash", "write_file"]);
+			expect(candidates[0]?.agent.tools.allowedTools).toEqual(["grep"]);
+			expect(candidates[1]?.agent.tools.deniedTools).toEqual([]);
+		});
+
+		it("generates runtime parameter mutation candidates", async () => {
+			const generator = createDeterministicCandidateGenerator({
+				mutations: [
+					{ id: "more-turns", kind: "set-max-turns", maxTurns: 5 },
+					{ id: "longer-timeout", kind: "set-timeout-ms", timeoutMs: 120_000 },
+					{ id: "more-tool-calls", kind: "set-max-tool-calls", maxToolCalls: 10 },
+				],
+			});
+
+			const candidates = await generator.generate(baseline);
+
+			expect(candidates[0]).toMatchObject({ id: "baseline-candidate-more-turns", kind: "runtime", patch: "runtime.maxTurns = 5" });
+			expect(candidates[0]?.agent.runtime.maxTurns).toBe(5);
+			expect(candidates[0]?.agent.runtime.timeoutMs).toBeUndefined();
+			expect(candidates[1]).toMatchObject({ id: "baseline-candidate-longer-timeout", kind: "runtime", patch: "runtime.timeoutMs = 120000" });
+			expect(candidates[1]?.agent.runtime.timeoutMs).toBe(120_000);
+			expect(candidates[2]).toMatchObject({ id: "baseline-candidate-more-tool-calls", kind: "runtime", patch: "tools.maxToolCalls = 10" });
+			expect(candidates[2]?.agent.tools.maxToolCalls).toBe(10);
+		});
+
+		it("rejects invalid mutations", () => {
 		expect(() => createDeterministicCandidateGenerator({ mutations: [] })).toThrow("mutations");
 		expect(() => createDeterministicCandidateGenerator({ mutations: [{ id: "bad", kind: "system-prompt-append", text: "" }] })).toThrow("mutation.text");
 		expect(() => createDeterministicCandidateGenerator({ maxCandidates: 0, mutations: [{ id: "ok", kind: "system-prompt-append", text: "ok" }] })).toThrow("maxCandidates");

@@ -55,7 +55,7 @@ function snapshot(activeView: TuiView, runningToolCount = 0): TuiStateSnapshot {
 		stats: {
 			overview: { eventCount: 0, turnCount: 0 },
 			runs: { count: 0, passed: 0, failed: 0, errored: 0, timeout: 0, totalDurationMs: 0 },
-			model: { requestCount: 0, responseCount: 0, assistantDeltaCount: 0, tokens: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 }, latency: { count: 0, totalMs: 0 } },
+			model: { requestCount: 0, responseCount: 0, assistantDeltaCount: 0, tokens: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 }, latency: { count: 0, totalMs: 0 }, turnUsageHistory: [], compactionCount: 0 },
 			tools: { callCount: 0, resultCount: 0, statuses: { success: 0, error: 0, denied: 0, unknown: 0, limit_exceeded: 0, timeout: 0 }, totalDurationMs: 0, mcpCount: 0, mcpDurationMs: 0, skillCount: 0, skillDurationMs: 0, memory: {} },
 			scores: { count: 0, passed: 0 },
 			errors: { count: 0 },

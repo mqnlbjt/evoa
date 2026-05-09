@@ -39,7 +39,7 @@ describe("HTTP MCP client smoke", () => {
 			expect(result.answer).toBe("done");
 			expect(result.trace).toEqual(expect.arrayContaining([
 				expect.objectContaining({ type: "tool_call", payload: expect.objectContaining({ call: expect.objectContaining({ name: "mcp__smoke__echo" }) }) }),
-				expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", output: expect.objectContaining({ content: [{ type: "text", text: "hi from runtime" }] }) }) }),
+				expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", visibleContentPreview: expect.stringContaining("hi from runtime") }) }),
 			]));
 		} finally {
 			await registry.close();

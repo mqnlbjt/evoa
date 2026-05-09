@@ -64,8 +64,8 @@ describe("AnthropicModelClient", () => {
 		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
 			model: "gpt-5.4-mini",
 			max_tokens: 64,
-			system: [{ type: "text", text: "You are concise.", cache_control: { type: "ephemeral" } }],
-			messages: [{ role: "user", content: [{ type: "text", text: "Say hi", cache_control: { type: "ephemeral" } }] }],
+			system: "You are concise.",
+			messages: [{ role: "user", content: "Say hi" }],
 		});
 	});
 
@@ -168,7 +168,7 @@ describe("AnthropicModelClient", () => {
 		});
 	});
 
-	it("uses one hour cache ttl only for official Anthropic base URLs", async () => {
+	it("uses cache control only for official Anthropic base URLs", async () => {
 		const bodies: unknown[] = [];
 		const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {
 			bodies.push(JSON.parse(String(init?.body)));
@@ -180,8 +180,7 @@ describe("AnthropicModelClient", () => {
 		await new AnthropicModelClient({ apiKey: "key", baseURL: "http://localhost:8317/v1", fetchFn }).complete({ agent: longAgent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
 
 		expect(bodies[0]).toMatchObject({ system: [{ cache_control: { type: "ephemeral", ttl: "1h" } }] });
-		expect(bodies[1]).toMatchObject({ system: [{ cache_control: { type: "ephemeral" } }] });
-		expect((bodies[1] as { system: Array<{ cache_control: { ttl?: string } }> }).system[0]?.cache_control.ttl).toBeUndefined();
+		expect(bodies[1]).toMatchObject({ system: "You are concise." });
 	});
 
 	it("parses reasoning usage tokens", async () => {

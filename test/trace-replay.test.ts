@@ -82,5 +82,5 @@ function runResult(runId: string, trace: TraceEvent[]): AgentTaskRunResult {
 }
 
 function events(items: Array<[TraceEvent["type"], string, number, unknown]>): TraceEvent[] {
-	return items.map(([type, id, timestamp, payload]) => ({ id, type, timestamp, agentId: "agent-1", taskId: "task-1", payload }));
+	return items.map(([type, id, timestamp, payload]) => ({ id, type, timestamp, agentId: "agent-1", taskId: "task-1", payload } as TraceEvent));
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { TraceEvent } from "../src/runtime/events.js";
 import { InputEditor } from "../src/tui/input-editor.js";
 import { renderTui as renderTuiWithAnsi } from "../src/tui/renderer.js";
 import { TuiState } from "../src/tui/state.js";
@@ -46,10 +47,10 @@ describe("renderTui", () => {
 
 	it("renders streaming assistant status running tools and errors", () => {
 		const state = createState();
-		state.applyTraceEvent({ id: "start", type: "run_start", timestamp: 1, agentId: "agent", taskId: "task", payload: {} });
-		state.applyTraceEvent({ id: "delta", type: "assistant_delta", timestamp: 1, agentId: "agent", taskId: "task", payload: { delta: "working" } });
-		state.applyTraceEvent({ id: "call", type: "tool_call", timestamp: 1, agentId: "agent", taskId: "task", payload: { call: { id: "call", name: "read_file", input: { path: "a" } } } });
-		state.applyTraceEvent({ id: "end", type: "run_end", timestamp: 1, agentId: "agent", taskId: "task", payload: { status: "failed" } });
+		state.applyTraceEvent({ id: "start", type: "run_start", timestamp: 1, agentId: "agent", taskId: "task", payload: {} } as TraceEvent);
+		state.applyTraceEvent({ id: "delta", type: "assistant_delta", timestamp: 1, agentId: "agent", taskId: "task", payload: { delta: "working" } } as TraceEvent);
+		state.applyTraceEvent({ id: "call", type: "tool_call", timestamp: 1, agentId: "agent", taskId: "task", payload: { call: { id: "call", name: "read_file", input: { path: "a" } } } } as TraceEvent);
+		state.applyTraceEvent({ id: "end", type: "run_end", timestamp: 1, agentId: "agent", taskId: "task", payload: { status: "failed" } } as TraceEvent);
 		const output = renderTui(state.snapshot(), new InputEditor(), { width: 100, height: 20, now: 2 });
 		expect(output).toContain("┃ LLM  working");
 		expect(output).toContain("┆ Tool → read_file a");
@@ -61,11 +62,11 @@ describe("renderTui", () => {
 
 	it("renders task and categorized tool timings", () => {
 		const state = createState();
-		state.applyTraceEvent({ id: "start", type: "run_start", timestamp: 10, agentId: "agent", taskId: "task", payload: {} });
+		state.applyTraceEvent({ id: "start", type: "run_start", timestamp: 10, agentId: "agent", taskId: "task", payload: {} } as TraceEvent);
 		state.applyTraceEvent(toolResult("tool", "read_file", 5));
 		state.applyTraceEvent(toolResult("mcp", "mcp__context7__query-docs", 7));
 		state.applyTraceEvent(toolResult("skill", "Skill", 11));
-		state.applyTraceEvent({ id: "end", type: "run_end", timestamp: 40, agentId: "agent", taskId: "task", payload: { status: "passed", durationMs: 30 } });
+		state.applyTraceEvent({ id: "end", type: "run_end", timestamp: 40, agentId: "agent", taskId: "task", payload: { status: "passed", durationMs: 30 } } as TraceEvent);
 		const output = renderTui(state.snapshot(), new InputEditor(), { width: 120, height: 20, now: 50 });
 		expect(output).toContain("runs: 1");
 		expect(output).toContain("task: 30ms");
@@ -76,15 +77,15 @@ describe("renderTui", () => {
 
 	it("renders running task timing before run end", () => {
 		const state = createState();
-		state.applyTraceEvent({ id: "start", type: "run_start", timestamp: 10, agentId: "agent", taskId: "task", payload: {} });
+		state.applyTraceEvent({ id: "start", type: "run_start", timestamp: 10, agentId: "agent", taskId: "task", payload: {} } as TraceEvent);
 		const output = renderTui(state.snapshot(), new InputEditor(), { width: 80, height: 20, now: 25 });
 		expect(output).toContain("task: 15ms");
 	});
 
 	it("renders stats page", () => {
 		const state = createState();
-		state.applyTraceEvent({ id: "request", type: "model_request", timestamp: 1, agentId: "agent", taskId: "task", payload: { turn: 1 } });
-		state.applyTraceEvent({ id: "response", type: "model_response", timestamp: 11, agentId: "agent", taskId: "task", payload: { text: "hi", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, timing: { startedAt: 1, endedAt: 11, durationMs: 10 } } });
+		state.applyTraceEvent({ id: "request", type: "model_request", timestamp: 1, agentId: "agent", taskId: "task", payload: { turn: 1 } } as TraceEvent);
+		state.applyTraceEvent({ id: "response", type: "model_response", timestamp: 11, agentId: "agent", taskId: "task", payload: { text: "hi", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, timing: { startedAt: 1, endedAt: 11, durationMs: 10 } } } as TraceEvent);
 		state.applyTraceEvent(toolResult("tool", "read_file", 5));
 		state.setView("stats");
 		const output = renderTui(state.snapshot(), new InputEditor(), { width: 120, height: 30, now: 20 });
@@ -190,6 +191,6 @@ function toolResult(id: string, name: string, durationMs: number) {
 		timestamp: 20,
 		agentId: "agent",
 		taskId: "task",
-		payload: { call: { id, name }, decision: { decision: "allow" }, status: "success", durationMs },
-	};
+		payload: { call: { id, name }, decision: { decision: "allow" }, status: "success", durationMs, visibleContentPreview: "ok" },
+	} as TraceEvent;
 }

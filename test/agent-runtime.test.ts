@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/runtime/agent-runtime.js";
 import { ToolRegistry } from "../src/tools/registry.js";
-import type { ModelClient } from "../src/models/types.js";
+import type { ModelClient, ModelRequest } from "../src/models/types.js";
 import type { AgentSpec, TaskSpec } from "../src/specs.js";
 
 const agent: AgentSpec = {
@@ -221,6 +221,34 @@ describe("AgentRuntime", () => {
 				}),
 			]),
 		});
+	});
+
+	it("uses provider input tokens plus trailing entries for the next turn estimate", async () => {
+		let turn = 0;
+		const seenRequests: ModelRequest[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenRequests.push(request);
+				turn += 1;
+				if (turn === 1) return { text: "checking", toolCalls: [{ id: "call-1", name: "echo", input: "ok" }], usage: { inputTokens: 100, outputTokens: 5 } };
+				return { text: "done" };
+			},
+		};
+		const registry = new ToolRegistry([
+			{
+				name: "echo",
+				description: "Echo input",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				async execute(input) {
+					return input;
+				},
+			},
+		]);
+
+		await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask(agent, task);
+
+		expect(seenRequests[1]?.routing?.inputTokenEstimate).toBeGreaterThan(100);
 	});
 
 	it("runs consecutive parallel-safe tool calls concurrently while preserving result order", async () => {
