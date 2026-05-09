@@ -136,6 +136,73 @@ describe("context compaction", () => {
 		expect(session.entries?.filter((entry) => entry.kind === "compaction")).toHaveLength(1);
 	});
 
+	it("extracts notable facts from compaction response and triggers callback", async () => {
+		const requests: ModelRequest[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				requests.push(request);
+				if (request.purpose === "compaction") return { text: markdownSummary(["User prefers TypeScript strict mode", "Avoid creating .md files"]) };
+				return { text: "done" };
+			},
+		};
+		const agent: AgentSpec = {
+			...baseAgent,
+			runtime: {
+				maxTurns: 1,
+				contextCompression: "auto",
+				contextBudget: { maxInputTokens: 120, reserveTokens: 1, triggerRatio: 0.5, keepRecentTokens: 1, summaryMaxTokens: 500 },
+			},
+		};
+		const captured: Array<{ facts: string[]; sessionId: string; entryId: string }> = [];
+		const runtime = new AgentRuntime({
+			modelClient,
+			createId: ids(),
+			now: () => 1,
+			onCompactionMemory: async (facts, session, entryId) => {
+				captured.push({ facts, sessionId: session.id, entryId });
+			},
+		});
+		const session = createAgentSession({ id: "session", agent, task, messages: longMessages() });
+
+		await runtime.runSession(session);
+
+		expect(captured).toHaveLength(1);
+		expect(captured[0]!.facts).toEqual(["User prefers TypeScript strict mode", "Avoid creating .md files"]);
+		expect(captured[0]!.sessionId).toBe("session");
+		expect(captured[0]!.entryId).toBeTruthy();
+	});
+
+	it("does not trigger callback when notable facts section is (none)", async () => {
+		const requests: ModelRequest[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				requests.push(request);
+				if (request.purpose === "compaction") return { text: markdownSummary([]) };
+				return { text: "done" };
+			},
+		};
+		const agent: AgentSpec = {
+			...baseAgent,
+			runtime: {
+				maxTurns: 1,
+				contextCompression: "auto",
+				contextBudget: { maxInputTokens: 120, reserveTokens: 1, triggerRatio: 0.5, keepRecentTokens: 1, summaryMaxTokens: 500 },
+			},
+		};
+		let callbackFired = false;
+		const runtime = new AgentRuntime({
+			modelClient,
+			createId: ids(),
+			now: () => 1,
+			onCompactionMemory: async () => { callbackFired = true; },
+		});
+		const session = createAgentSession({ id: "session", agent, task, messages: longMessages() });
+
+		await runtime.runSession(session);
+
+		expect(callbackFired).toBe(false);
+	});
+
 	it("routes tool-heavy turns when configured and tools are available", async () => {
 		const requests: ModelRequest[] = [];
 		const agent: AgentSpec = {
@@ -166,22 +233,74 @@ function recordingClient(requests: ModelRequest[]): ModelClient {
 	};
 }
 
+function markdownSummary(facts: string[]): string {
+	const factLines = facts.length === 0 ? "- (none)" : facts.map((f) => `- ${f}`).join("\n");
+	return `## Task Goal
+Respond to the current prompt concisely.
+
+## Key Decisions
+- Use TypeScript ESM strict mode throughout the project
+
+## File Changes
+- No files were read or modified during this synthetic test run.
+
+## Errors and Fixes
+- No errors occurred while summarizing this synthetic conversation.
+
+## User Messages
+- The user asked the agent to answer the current prompt.
+
+## Next Steps
+1. Continue responding to the current prompt.
+
+## Notable Facts
+${factLines}`;
+}
+
 function compactionSummary(): string {
-	return compactionSummaryWithPath("No files were read or modified during this synthetic test run.");
+	return `## Task Goal
+Respond to the current prompt concisely.
+
+## Key Decisions
+- Use TypeScript ESM strict mode throughout the project
+
+## File Changes
+- No files were read or modified during this synthetic test run.
+
+## Errors and Fixes
+- No errors occurred while summarizing this synthetic conversation.
+
+## User Messages
+- The user asked the agent to answer the current prompt.
+
+## Next Steps
+1. Continue responding to the current prompt.
+
+## Notable Facts
+- (none)`;
 }
 
 function compactionSummaryWithPath(path: string): string {
-	return `<summary>
-<primary_request>current prompt</primary_request>
-<key_technical_concepts>TypeScript runtime context compaction validation and trace events.</key_technical_concepts>
-<files_and_code_sections>${path}</files_and_code_sections>
-<errors_and_fixes>No errors occurred while summarizing this synthetic conversation.</errors_and_fixes>
-<problem_solving>The runtime summarized older entries before sending the final main model request.</problem_solving>
-<all_user_messages>The user asked the agent to answer the current prompt.</all_user_messages>
-<pending_tasks>No pending tasks remain in this synthetic test.</pending_tasks>
-<current_work>The agent is preparing a compact context for the next model request.</current_work>
-<optional_next_step>Send the compacted context to the main model request.</optional_next_step>
-</summary>`;
+	return `## Task Goal
+Respond to the current prompt concisely.
+
+## Key Decisions
+- Use TypeScript ESM strict mode throughout the project
+
+## File Changes
+- ${path}
+
+## Errors and Fixes
+- No errors occurred while summarizing this synthetic conversation.
+
+## User Messages
+- The user asked the agent to answer the current prompt.
+
+## Next Steps
+1. Continue responding to the current prompt.
+
+## Notable Facts
+- (none)`;
 }
 
 function longMessages() {

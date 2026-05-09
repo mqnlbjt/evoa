@@ -155,6 +155,7 @@ export interface MemoryTurnInput {
 	startMessageIndex: number;
 	now: () => number;
 	createId: () => string;
+	force?: boolean;
 }
 
 export interface MemoryReplayResult {

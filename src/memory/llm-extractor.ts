@@ -21,16 +21,25 @@ interface SemanticMemoryCandidate {
 }
 
 export class LlmMemoryExtractor implements MemoryExtractor {
-	constructor(private readonly modelClient: ModelClient, private readonly baseAgent: AgentSpec, private readonly fallback: MemoryExtractor = ruleBasedMemoryExtractor) {}
+	constructor(
+		private readonly modelClient: ModelClient,
+		private readonly baseAgent: AgentSpec,
+		private readonly fallback: MemoryExtractor = ruleBasedMemoryExtractor,
+		private readonly extractInterval: number = 10,
+	) {}
+
+	private turnCount = 0;
 
 	async extract(input: MemoryTurnInput): Promise<MemoryCandidate[]> {
 		const episodeCandidates = (await this.fallback.extract(input)).filter((candidate) => candidate.layer === "episode");
+		this.turnCount += 1;
+		if (!input.force && this.turnCount > 1 && this.turnCount % this.extractInterval !== 0) return episodeCandidates;
 		try {
 			const response = await this.modelClient.complete(memoryRequest(input, this.baseAgent));
 			const semanticCandidates = parseSemanticCandidates(response.text ?? "", input);
 			return [...episodeCandidates, ...semanticCandidates];
 		} catch {
-			return this.fallback.extract(input);
+			return episodeCandidates;
 		}
 	}
 }
@@ -39,8 +48,8 @@ function memoryRequest(input: MemoryTurnInput, baseAgent: AgentSpec): ModelReque
 	const prompt = [
 		"Extract durable long-term memories from the new conversation messages.",
 		"Return strict JSON only: {\"memories\":[...]}. Do not include markdown.",
-		"Save stable user identity, preferences, important person facts, project constraints, feedback, and external references.",
-		"Do not verify temporary task state, assistant acknowledgements, code facts that can be reread, git history, or unverified third-party sensitive health/cognitive/disability/diagnostic labels.",
+		"Save stable user identity, preferences, important person facts, project constraints, project structure (key modules, file locations, architecture), feedback, and external references.",
+		"Do not save temporary task state, assistant acknowledgements, git history, or unverified third-party sensitive health/cognitive/disability/diagnostic labels.",
 		"If a requested memory is unsafe, stigmatizing, or sensitive, include it only with suitability=\"quarantine\" and safety=\"unsafe_or_sensitive\".",
 		"Each memory must include: layer knowledge|doctrine, content, scope user|project|agent|session, topic, stable, key when useful, suitability long_term|quarantine, safety safe|unsafe_or_sensitive, reason, sourceMessageIndexes.",
 		"New messages:",

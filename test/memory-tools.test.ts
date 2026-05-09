@@ -13,24 +13,24 @@ import type { MemoryItem } from "../src/memory/types.js";
 
 describe("memory tools", () => {
 	it("returns memory context items", async () => {
-		const store = new JsonMemoryStore(await root());
-		await store.append(memory("stable", "默认中文回答", { stable: true }));
-		await store.append(memory("dynamic", "项目使用 TypeScript", { stable: false }));
+			const store = new JsonMemoryStore(await root());
+		await store.append(memory("stable", "prefer English responses", { stable: true }));
+		await store.append(memory("dynamic", "Project uses TypeScript", { stable: false }));
 		const registry = registryFor(store);
-		const result = await execute(registry, "memory_context", { query: "默认 TypeScript" });
+		const result = await execute(registry, "memory_context", { query: "prefer TypeScript" });
 
 		expect(result.status).toBe("success");
 		expect(result.output).toMatchObject({ stableItemIds: ["stable"], dynamicItemIds: ["dynamic"] });
 	});
 
 	it("searches and reads only verified in-scope memories", async () => {
-		const store = new JsonMemoryStore(await root());
-		await store.append(memory("visible", "默认中文回答", { stable: true }));
-		await store.append(memory("quarantined", "中文敏感事实", { stable: true }, { status: "quarantined" }));
-		await store.append(memory("other-project", "中文项目事实", { stable: true, projectId: "other" }, { scope: "project" }));
+			const store = new JsonMemoryStore(await root());
+		await store.append(memory("visible", "prefer English responses", { stable: true }));
+		await store.append(memory("quarantined", "Sensitive personal fact", { stable: true }, { status: "quarantined" }));
+		await store.append(memory("other-project", "Project-related fact", { stable: true, projectId: "other" }, { scope: "project" }));
 		const registry = registryFor(store);
 
-		const search = await execute(registry, "memory_search", { query: "中文", limit: 5 });
+		const search = await execute(registry, "memory_search", { query: "prefer", limit: 5 });
 		expect(search.output).toMatchObject({ items: [expect.objectContaining({ id: "visible" })] });
 
 		const read = await execute(registry, "memory_read", { ids: ["visible", "quarantined", "other-project"] });
@@ -38,28 +38,28 @@ describe("memory tools", () => {
 	});
 
 	it("remembers, updates, and forgets through append-only tool calls", async () => {
-		const store = new JsonMemoryStore(await root());
+			const store = new JsonMemoryStore(await root());
 		const registry = registryFor(store);
-		const remember = await execute(registry, "memory_remember", { content: "默认中文回答", layer: "knowledge", scope: "user", stable: true, key: "user.preference.language" });
+		const remember = await execute(registry, "memory_remember", { content: "prefer English responses", layer: "knowledge", scope: "user", stable: true, key: "user.preference.language" });
 		const firstId = itemId(remember.output);
 
 		expect(remember.status).toBe("success");
 		expect(remember.output).toMatchObject({ item: expect.objectContaining({ status: "verified", sourceRefs: [expect.objectContaining({ kind: "trace_event" })] }) });
 
-		const update = await execute(registry, "memory_update", { id: firstId, content: "默认英文回答", reason: "用户纠正" });
+		const update = await execute(registry, "memory_update", { id: firstId, content: "prefer French responses", reason: "user correction" });
 		const secondId = itemId(update.output);
 		expect(update.output).toMatchObject({ previousId: firstId, item: expect.objectContaining({ metadata: expect.objectContaining({ supersedes: [firstId] }) }) });
 
-		const search = await execute(registry, "memory_search", { query: "默认" });
+		const search = await execute(registry, "memory_search", { query: "prefer" });
 		expect(search.output).toMatchObject({ items: [expect.objectContaining({ id: secondId })] });
 
-		const forget = await execute(registry, "memory_forget", { ids: [secondId], reason: "用户要求删除" });
+		const forget = await execute(registry, "memory_forget", { ids: [secondId], reason: "user requested deletion" });
 		expect(forget.output).toMatchObject({ revoked: [secondId], missing: [] });
 		expect((await execute(registry, "memory_read", { ids: [secondId] })).output).toMatchObject({ items: [], missing: [secondId] });
 	});
 
 	it("uses low parallel-safe policies for reads and medium sequential policies for writes", async () => {
-		const registry = registryFor(new JsonMemoryStore(await root()));
+			const registry = registryFor(new JsonMemoryStore(await root()));
 		for (const name of ["memory_context", "memory_search", "memory_read"]) {
 			expect(registry.get(name)).toMatchObject({ concurrency: "parallel-safe", permission: { defaultDecision: "allow", riskLevel: "low" } });
 		}
@@ -126,6 +126,6 @@ const task: TaskSpec = {
 	id: "task",
 	type: "general",
 	title: "Task",
-	prompt: "默认",
+	prompt: "default",
 	scoring: { method: "rubric", config: { contains: [] } },
 };

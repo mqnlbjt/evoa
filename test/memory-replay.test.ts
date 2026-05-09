@@ -8,6 +8,10 @@ describe("memory replay", () => {
 			agentId: "agent",
 			sessionId: "s1",
 			messages: [{ role: "system", content: "sys" }, { role: "user", content: "记住我是 wyq" }],
+			extractor: fakeExtractor(
+				{ layer: "episode", scope: "session", content: "user: 记住我是 wyq", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "general" } },
+				{ layer: "knowledge", scope: "user", content: "用户是wyq", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "user" } },
+			),
 			now: () => 1,
 		});
 
@@ -16,7 +20,7 @@ describe("memory replay", () => {
 	});
 
 	it("rebuilds without removed sources", async () => {
-		const before = await replayMemory({ agentId: "agent", sessionId: "s1", messages: [{ role: "user", content: "记住我是 wyq" }] });
+		const before = await replayMemory({ agentId: "agent", sessionId: "s1", messages: [{ role: "user", content: "记住我是 wyq" }], extractor: fakeExtractor({ layer: "knowledge", scope: "user", content: "用户是wyq", sourceRefs: [{ kind: "message", id: "s1:0", sessionId: "s1", messageIndex: 0, excerptHash: "hash" }], metadata: { sessionId: "s1" } }) });
 		const after = await replayMemory({ agentId: "agent", sessionId: "s1", messages: [] });
 
 		expect(before.items.length).toBeGreaterThan(after.items.length);
@@ -63,7 +67,16 @@ describe("memory replay", () => {
 	});
 
 	it("replays project-scoped memories with project ids", async () => {
-		const result = await replayMemory({ agentId: "agent", sessionId: "s1", projectId: "p1", messages: [{ role: "user", content: "记住项目采用 TypeScript" }], now: () => 1 });
+		const result = await replayMemory({
+			agentId: "agent",
+			sessionId: "s1",
+			projectId: "p1",
+			messages: [{ role: "user", content: "记住项目采用 TypeScript" }],
+			extractor: fakeExtractor(
+				{ layer: "knowledge", scope: "project", content: "项目采用 TypeScript", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "project" } },
+			),
+			now: () => 1,
+		});
 
 		expect(result.items).toEqual(expect.arrayContaining([
 			expect.objectContaining({ scope: "project", metadata: expect.objectContaining({ projectId: "p1" }) }),

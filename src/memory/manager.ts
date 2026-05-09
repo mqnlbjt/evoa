@@ -78,9 +78,13 @@ export class MemoryManager {
 
 	async recordTurn(input: MemoryTurnInput): Promise<MemoryItem[]> {
 		const candidates = await this.extractor.extract(input);
+		return this.recordCandidates(candidates, input.agentId, input.now, input.createId, input.projectId);
+	}
+
+	async recordCandidates(candidates: MemoryCandidate[], agentId: string, now: () => number, createId: () => string, projectId?: string): Promise<MemoryItem[]> {
 		const items: MemoryItem[] = [];
 		for (const candidate of candidates) {
-			items.push(await this.recordCandidate(candidate, input.agentId, input.now(), input.createId, input.projectId));
+			items.push(await this.recordCandidate(candidate, agentId, now(), createId, projectId));
 		}
 		return items;
 	}

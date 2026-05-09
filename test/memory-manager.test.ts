@@ -8,7 +8,12 @@ import type { MemoryCandidate, MemoryExtractor } from "../src/memory/types.js";
 
 describe("MemoryManager", () => {
 	it("records verified memories with source refs", async () => {
-		const manager = new MemoryManager(new JsonMemoryStore(await root()));
+		const extractor = fakeExtractor(
+			{ layer: "episode", scope: "session", content: "user: 记住我是 wyq，以后默认中文回答", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "general" } },
+			{ layer: "knowledge", scope: "user", content: "用户是wyq", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "user" } },
+			{ layer: "doctrine", scope: "user", content: "默认中文回答", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "doctrine" } },
+		);
+		const manager = new MemoryManager(new JsonMemoryStore(await root()), extractor);
 		const items = await manager.recordTurn({
 			agentId: "agent",
 			sessionId: "s1",
@@ -26,7 +31,10 @@ describe("MemoryManager", () => {
 	});
 
 	it("normalizes parent identity memories into answerable facts", async () => {
-		const manager = new MemoryManager(new JsonMemoryStore(await root()));
+		const extractor = fakeExtractor(
+			{ layer: "knowledge", scope: "user", content: "用户是wyq。黄金山是用户的孩子。", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "user", stable: true } },
+		);
+		const manager = new MemoryManager(new JsonMemoryStore(await root()), extractor);
 		await manager.recordTurn({
 			agentId: "agent",
 			sessionId: "s1",
@@ -44,7 +52,11 @@ describe("MemoryManager", () => {
 	});
 
 	it("builds stable context with deterministic ordering", async () => {
-		const manager = new MemoryManager(new JsonMemoryStore(await root()));
+		const extractor = fakeExtractor(
+			{ layer: "doctrine", scope: "user", content: "默认中文回答", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: "s1", topic: "doctrine" } },
+			{ layer: "knowledge", scope: "user", content: "用户的名字是 wyq", sourceRefs: [{ kind: "message", id: "s1:2", sessionId: "s1", messageIndex: 2, excerptHash: "hash2" }], metadata: { sessionId: "s1", topic: "user" } },
+		);
+		const manager = new MemoryManager(new JsonMemoryStore(await root()), extractor);
 		await manager.recordTurn({
 			agentId: "agent",
 			sessionId: "s1",

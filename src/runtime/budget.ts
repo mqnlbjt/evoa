@@ -59,9 +59,9 @@ const defaultMicroCompact: MicroCompactConfig = {
 };
 
 const defaultContextBudget: ResolvedContextBudget = {
-	maxInputTokens: 64_000,
-	reserveTokens: 8_000,
-	keepRecentTokens: 16_000,
+	maxInputTokens: 256_000,
+	reserveTokens: 16_000,
+	keepRecentTokens: 32_000,
 	triggerRatio: 0.85,
 	summaryMaxTokens: 4_000,
 	maxCompactionsPerRun: 3,
@@ -71,7 +71,7 @@ const defaultContextBudget: ResolvedContextBudget = {
 	iterativeSummary: true,
 };
 
-const defaultToolOutputMaxBytes = 64 * 1024;
+const defaultToolOutputMaxBytes = 32 * 1024;
 
 export function resolveContextBudget(agent: AgentSpec): ResolvedContextBudget {
 	const microCompact = resolveMicroCompact(agent.runtime.contextBudget?.microCompact);

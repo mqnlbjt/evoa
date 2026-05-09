@@ -8,25 +8,25 @@ describe("LlmMemoryExtractor", () => {
 	it("extracts structured semantic memories with local source refs", async () => {
 		const extractor = new LlmMemoryExtractor(fakeModel(JSON.stringify({ memories: [{
 			layer: "knowledge",
-			content: "黄金山喜欢玩原神。",
+			content: "Alice likes to play tennis.",
 			topic: "person",
 			scope: "user",
 			stable: true,
-			key: "person.黄金山.hobby",
+			key: "person.alice.hobby",
 			suitability: "long_term",
 			safety: "safe",
 			reason: "durable preference",
 			sourceMessageIndexes: [1],
-		}] })), agent());
+		}] })), agent(), undefined, 1);
 
-		const candidates = await extractor.extract(input("黄金山爱玩原神"));
+		const candidates = await extractor.extract(input("Alice likes to play tennis"));
 
 		expect(candidates).toEqual(expect.arrayContaining([
 			expect.objectContaining({
 				layer: "knowledge",
-				content: "黄金山喜欢玩原神。",
+				content: "Alice likes to play tennis.",
 				scope: "user",
-				metadata: expect.objectContaining({ key: "person.黄金山.hobby", suitability: "long_term", safety: "safe" }),
+				metadata: expect.objectContaining({ key: "person.alice.hobby", suitability: "long_term", safety: "safe" }),
 				sourceRefs: [expect.objectContaining({ id: "s1:1", messageIndex: 1 })],
 			}),
 		]));
@@ -34,7 +34,7 @@ describe("LlmMemoryExtractor", () => {
 
 	it("marks memory extraction requests with a dedicated purpose", async () => {
 		let seenRequest: ModelRequest | undefined;
-		const extractor = new LlmMemoryExtractor({ async complete(request) { seenRequest = request; return { text: "{\"memories\":[]}" }; } }, agent());
+		const extractor = new LlmMemoryExtractor({ async complete(request) { seenRequest = request; return { text: "{\"memories\":[]}" }; } }, agent(), undefined, 1);
 
 		await extractor.extract(input("remember this"));
 
@@ -43,11 +43,11 @@ describe("LlmMemoryExtractor", () => {
 	});
 
 	it("falls back when semantic JSON is invalid", async () => {
-		const extractor = new LlmMemoryExtractor(fakeModel("not json"), agent(), fakeFallback());
+		const extractor = new LlmMemoryExtractor(fakeModel("not json"), agent(), episodeFallback(), 1);
 
 		const candidates = await extractor.extract(input("hello"));
 
-		expect(candidates).toEqual([expect.objectContaining({ content: "fallback" })]);
+		expect(candidates).toEqual([expect.objectContaining({ layer: "episode", content: "user: hello" })]);
 	});
 });
 
@@ -80,6 +80,6 @@ function fakeModel(text: string): ModelClient {
 	return { async complete() { return { text }; } };
 }
 
-function fakeFallback(): MemoryExtractor {
-	return { async extract() { return [{ layer: "knowledge", content: "fallback", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }] }]; } };
+function episodeFallback(): MemoryExtractor {
+	return { async extract(input) { return [{ layer: "episode", scope: "session", content: "user: hello", sourceRefs: [{ kind: "message", id: "s1:1", sessionId: "s1", messageIndex: 1, excerptHash: "hash" }], metadata: { sessionId: input.sessionId, topic: "general" } }]; } };
 }

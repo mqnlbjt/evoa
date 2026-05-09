@@ -30,6 +30,7 @@ export interface CompactionResult {
 	summaryTokens?: number;
 	inputTokens?: number;
 	ptlRetry?: { attempts: number; entriesDropped: number };
+	notableFacts?: string[];
 }
 
 export async function maybeCompactContext(input: MaybeCompactContextInput): Promise<CompactionResult> {
@@ -103,6 +104,8 @@ export async function maybeCompactContext(input: MaybeCompactContextInput): Prom
 				result.summaryTokens = estimateTextTokens(summary);
 				result.inputTokens = inputTokens;
 				if (ptlRetries > 0) result.ptlRetry = { attempts: ptlRetries, entriesDropped: totalDropped };
+				const facts = extractNotableFacts(summary);
+				if (facts.length > 0) result.notableFacts = facts;
 				return result;
 			}
 			lastFailure = validation.reason;
@@ -128,25 +131,43 @@ function compactedResult(entry: CompactionSessionEntry, sourceEntryCount: number
 	};
 }
 
+const compactSectionTemplate = `## Task Goal
+[What the user wants to accomplish. Current progress, what remains to be done.]
+
+## Key Decisions
+- [What choices were made and why]
+- [Technologies, frameworks, libraries, patterns involved]
+- [Approaches rejected and reasons]
+
+## File Changes
+- \`path/to/file\` — what changed, key function/class names
+- (Keep exact paths)
+
+## Errors and Fixes
+- Error → Cause → Fix → Resolved/Unresolved
+
+## User Messages
+- [List all user messages verbatim in order]
+- [Especially constraints and corrective feedback]
+
+## Next Steps
+1. [Actionable steps in priority order]
+
+## Notable Facts
+- [Fact worth remembering for future sessions. One fact per line. Write "(none)" if nothing notable.]
+- [Include: user preferences, project conventions, key architectural decisions, repeated errors that should be avoided]`;
+
+const compactOutputRules = `Output only the Markdown structure above. Do not output any other text. Do not call tools. The Notable Facts section is optional — write "(none)" when there are no notable facts to carry forward.`;
+
 function buildCompactionMessages(entries: SessionEntry[], budget: ResolvedContextBudget, previousSummary?: string, memoryContent?: string): ModelMessage[] {
 	const serialized = serializeEntriesForSummary(entries);
 	const structuredFileOps = formatStructuredFileOps(collectFileOps(entries));
-	const memorySection = memoryContent ? `\n<session_memories>\nThese memories were extracted from earlier turns in this session. Use them to avoid re-extracting the same information:\n${memoryContent}\n</session_memories>\n` : "";
-	const sections = [
-		"<primary_request>Copy the user's original request verbatim.</primary_request>",
-		"<key_technical_concepts>Languages, frameworks, libraries, APIs, patterns, and protocols used or discussed. Include version constraints if known.</key_technical_concepts>",
-		"<files_and_code_sections>List every file path that was read, modified, or created. For each, include: path, a one-line summary of its role, and key functions/classes touched. Preserve exact paths.</files_and_code_sections>",
-		"<errors_and_fixes>Every error encountered, its root cause, the fix applied, and whether it was resolved. Mark unresolved errors clearly.</errors_and_fixes>",
-		"<problem_solving>Problems solved and how. Include approach decisions, trade-offs made, alternatives considered and rejected, and any dead ends explored.</problem_solving>",
-		"<all_user_messages>List every message the user sent, in order. Preserve the exact text of important constraints or instructions.</all_user_messages>",
-		"<pending_tasks>Tasks not yet started, ordered by priority. Each with a one-line description.</pending_tasks>",
-		"<current_work>Work in progress right now: what was being done when the conversation was compacted, any blockers, partial results.</current_work>",
-		"<optional_next_step>The single most important next action, with enough context for the next agent to start immediately.</optional_next_step>",
-	];
-	const outputFormat = `<analysis>\nThink step by step about what happened in the conversation. Identify the primary request, key decisions, files touched, errors and their fixes, problems solved, user messages, and remaining work.\n</analysis>\n<summary>\n${sections.join("\n")}\n</summary>`;
+	const memorySection = memoryContent ? `\n## Existing Memories\nThe following are memories already extracted from this session. Avoid duplicating them:\n${memoryContent}\n` : "";
+
 	const systemPrompt = previousSummary
-		? `You are a conversation archivist. Summarize the new entries below and merge them with the existing <previous-summary>, producing a single updated summary. Do NOT call tools. Return ONLY the XML structure shown—no text outside the tags.\n\nFirst, in <analysis>, reason about what is new vs already covered in the previous summary. Then, in <summary>, output the merged result with all 9 sections updated.\n\nMerge rules:\n- <primary_request>: preserve verbatim unless the user changed it.\n- <key_technical_concepts>: append new concepts; do not drop old ones.\n- <files_and_code_sections>: merge both old and new file lists; deduplicate by path.\n- <errors_and_fixes>: append new errors; mark resolved ones.\n- <problem_solving>: preserve old decisions; add new ones.\n- <all_user_messages>: append new user messages in order.\n- <pending_tasks>: remove completed items; add new pending tasks.\n- <current_work>: update to reflect the latest state.\n- <optional_next_step>: replace with the latest next step.\n\nOutput format:\n${outputFormat}`
-		: `You are a conversation archivist. Summarize the conversation below for another agent that will resume the work. Do NOT call tools. Return ONLY the XML structure shown—no text outside the tags.\n\nFirst, in <analysis>, reason step by step about the conversation. Then, in <summary>, capture everything in 9 structured sections.\n\nRules for each section:\n- <primary_request>: the user's original task, verbatim.\n- <key_technical_concepts>: every technology, library, pattern, or protocol mentioned.\n- <files_and_code_sections>: every file path with what changed or was read.\n- <errors_and_fixes>: error → root cause → fix → resolved/unresolved.\n- <problem_solving>: approach, trade-offs, dead ends.\n- <all_user_messages>: every user message, preserving exact constraints.\n- <pending_tasks>: ordered by priority.\n- <current_work>: what was happening right now, with blockers.\n- <optional_next_step>: one specific, actionable next step.\n\nOutput format:\n${outputFormat}`;
+		? `You are a conversation archivist. Merge the new conversation content below into the existing <previous-summary> to produce an updated summary.\n\n${compactOutputRules}\n\nMerge rules:\n- Task Goal: Add new progress, keep the original goal\n- Key Decisions: Append new decisions, keep old ones\n- File Changes: Merge both lists, deduplicate by path\n- Errors and Fixes: Append new errors, mark resolved ones\n- User Messages: Append new messages in order\n- Next Steps: Remove completed items, add new ones, keep priority order\n\nOutput format:\n${compactSectionTemplate}`
+		: `You are a conversation archivist. Summarize the conversation below for another Agent to continue working.\n\n${compactOutputRules}\n\nOutput format:\n${compactSectionTemplate}`;
+
 	return [
 		{ role: "system", content: systemPrompt },
 		{
@@ -231,9 +252,19 @@ function limitSummaryText(value: string): string {
 function parseCompactionSummary(text: string): string {
 	const trimmed = text.trim();
 	if (trimmed.length === 0) return "No summary was produced during context compaction.";
-	const summaryMatch = trimmed.match(/<summary>([\s\S]*)<\/summary>/);
-	if (summaryMatch && summaryMatch[1]) return summaryMatch[1].trim();
 	return trimmed;
+}
+
+function extractNotableFacts(summary: string): string[] {
+	const sectionMatch = summary.match(/## Notable Facts\s*\n([\s\S]*?)(?=\n## |$)/i);
+	if (!sectionMatch?.[1]) return [];
+	const body = sectionMatch[1].trim();
+	const stripped = body.split("\n")[0]?.replace(/^[-*]\s*/, "").trim().toLowerCase() ?? "";
+	if (body === "" || stripped === "(none)" || stripped === "n/a") return [];
+	return body
+		.split("\n")
+		.map((line) => line.replace(/^[-*]\s*/, "").trim())
+		.filter((line) => line.length > 0);
 }
 
 interface SummaryValidation {
@@ -244,7 +275,7 @@ interface SummaryValidation {
 function validateCompactionSummary(summary: string, sourceEntries: SessionEntry[], budget: ResolvedContextBudget): SummaryValidation {
 	if (!summary || summary.length < 100) return { valid: false, reason: `summary too short (${summary.length} chars, need >= 100)` };
 	if (estimateTextTokens(summary) > budget.summaryMaxTokens) return { valid: false, reason: `summary tokens ${estimateTextTokens(summary)} exceed budget ${budget.summaryMaxTokens}` };
-	const requiredSections = ["<primary_request>", "<files_and_code_sections>", "<pending_tasks>"];
+	const requiredSections = ["## Task Goal", "## File Changes", "## Next Steps"];
 	const missingSections = requiredSections.filter((s) => !summary.includes(s));
 	if (missingSections.length > 0) return { valid: false, reason: `missing required sections: ${missingSections.join(", ")}` };
 	const paths = extractFilePaths(sourceEntries);
