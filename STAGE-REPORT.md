@@ -435,44 +435,38 @@ ModelRegistry
 
 ## 当前缺失的关键能力
 
-优先级较高：
+详见 `REQUIREMENTS.md` 第 6 节完整的优先级路线图。核心依赖链：
 
-1. **OS/container 级工具沙箱**：当前 benchmark-sandbox 只是 workspace/cwd 级约束。
+```
+Evolution 质量 = Benchmark 覆盖度 × Grader 质量 × Verification 门禁
+```
 
-优先级中等：
+按优先级排序：
 
-1. **Runtime events 结构化增强**：compaction/micro-compact/truncation 事件已定义 payload 并触发，可进一步增强 trace 完整性（如 memory extraction、subagent span 纳入 trace）。
-2. **session compaction entry 独立单测**：session.ts 新增大量 logic 但缺少独立单元测试。
-
-优先级较低：
-
-1. hooks。
-2. skills。
-3. worktree isolation。
-4. background task。
-5. Slack bot。
+1. **更强的 Grader（P0）**：当前仅 exact/rubric string match，缺 LLM judge、command、artifact 评分。
+2. **覆盖实际场景的 Benchmark Suite（P1）**：当前仅 1 个 smoke task，缺 coding/tool-use/memory/long-context/error-recovery 场景。
+3. **自动进化闭环（P2）**：engine 可对比但缺自动迭代、LLM candidate generation、promotion/rollback。
+4. **Subagent 优化（P3）**：并行执行、trigger 路由、角色编排、TUI 树展示。
+5. **SOP / 可复用工作流（P4）**：一等 SOP schema、注册引擎、常用 SOP 内置。
+6. **TUI Markdown 增强（P5）**：加粗/斜体、链接、表格、代码高亮。
 
 ## 建议下一阶段
 
-已完成：
+当前阶段已完成的 MVP 能力：
 
-- chat CLI 单次/交互式对话。
-- session memory 保存/恢复，含 startup context。
-- 默认 CLI 配置。
-- TUI 交互系统。
-- MCP 工具集成。
-- 记忆管理系统。
-- benchmark 覆盖关键路径回归测试。
-- context compaction / micro-compact / 上下文裁剪 / 工具输出截断。
-- 模型路由与模型缓存。
-- **index.ts 公共 API 导出补全**：MCP（adapter/client/diagnostics/names/registry/result）和 memory（manager/tools/extractor/llm-extractor/json-memory-store/diff/replay/verifier/resolution）模块。
-- **verification artifact**：VerificationIssue 携带结构化 details，新增 PolicyEventArtifact、TruncationArtifact、ErrorArtifact，VerificationReport 包含完整 artifact 摘要（policy denials、truncation、errors 统计）。
-- **deterministic candidate generator 扩展**：新增 5 种 mutation 类型 — denied-tools-add/remove、set-max-turns、set-timeout-ms、set-max-tool-calls，覆盖 runtime 参数变异能力。
+- Agent runtime（loop/session/events/compaction/budget/timeout）。
+- 完整工具系统（workspace/bash/subagent/web-fetch/MCP + 权限策略 + 工具输出截断）。
+- Model client（OpenAI Responses / Anthropic Messages）+ model registry + purpose-based 路由。
+- 完整 CLI（chat/run/benchmark/evolve/models/tui）。
+- TUI 交互系统（19 文件，基础 markdown 渲染）。
+- Benchmark + Evolution comparison + Verification + History store。
+- 记忆管理（LLM 提取、CRUD、差异、重放、验证、冲突解决）。
+- 持久化（JSONL run store、session store）。
+- Trace replay + run diff。
+- 公共 API 导出（index.ts 完整）。
 
-下一目标：
+下一阶段的核心方向：**从「可运行 Agent」到「可自我改进的 Agent」**。
 
-1. **考虑 runtime event 扩展**：compaction/micro-compact/truncation 事件已在 events.ts 中定义 payload 类型并已在 loop.ts 中触发，但可进一步增强 trace 完整性（如 memory extraction、subagent span 纳入 trace）。
-2. **考虑 session compaction entry 独立单测**：session.ts 新增大量 compaction/trim/micro-compact 逻辑。
-3. **考虑 OS/container 级工具沙箱**：当前 benchmark-sandbox 只是 workspace/cwd 级约束。
+首要目标（P0）是实现更强的 Grader，因为它是所有自动化评估和进化决策的基础：没有可靠的评分，benchmark 和 evolution 都缺乏意义。
 
-这样可以把当前”可用 Agent → 可验证 Agent → 可演化 Agent”的主线持续推进。
+然后依次推进真实场景 benchmark → 自动进化闭环 → subagent 增强 → SOP 工作流 → TUI 体验优化。

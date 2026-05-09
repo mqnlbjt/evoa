@@ -1,0 +1,28 @@
+{
+	"id": "rubric-criteria-smoke",
+	"name": "Rubric Criteria Smoke Suite",
+	"description": "Demonstrates the weighted criteria rubric grading method.",
+	"tasks": [
+		{
+			"id": "three-laws-rubric",
+			"type": "general",
+			"title": "Three Laws of Robotics explanation",
+			"prompt": "Explain the Three Laws of Robotics and who created them.",
+			"scoring": {
+				"method": "rubric",
+				"maxScore": 5,
+				"config": {
+					"criteria": [
+						{ "description": "First Law", "weight": 1 },
+						{ "description": "Second Law", "weight": 1 },
+						{ "description": "Third Law", "weight": 1 },
+						{ "description": "Asimov", "weight": 2, "required": true }
+					],
+					"passThreshold": 0.6
+				}
+			},
+			"metadata": { "example": true }
+		}
+	],
+	"metadata": { "example": true }
+}

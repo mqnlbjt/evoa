@@ -1,0 +1,23 @@
+{
+	"id": "llm-judge-smoke",
+	"name": "LLM Judge Smoke Suite",
+	"description": "Demonstrates LLM-as-judge grading. Requires a ModelClient to be available (use --provider and --model flags).",
+	"tasks": [
+		{
+			"id": "fizzbuzz-judge",
+			"type": "coding",
+			"title": "FizzBuzz implementation judged by LLM",
+			"prompt": "Write a Python function fizzbuzz(n) that prints numbers 1 to n, replacing multiples of 3 with 'Fizz', multiples of 5 with 'Buzz', and multiples of both with 'FizzBuzz'.",
+			"scoring": {
+				"method": "llm-judge",
+				"maxScore": 10,
+				"config": {
+					"criteria": "Function is named fizzbuzz. Takes one integer parameter n. Prints numbers 1 to n. Multiples of 3 print 'Fizz'. Multiples of 5 print 'Buzz'. Multiples of both print 'FizzBuzz'. Code is valid Python.",
+					"passThreshold": 0.5
+				}
+			},
+			"metadata": { "example": true }
+		}
+	],
+	"metadata": { "example": true }
+}
