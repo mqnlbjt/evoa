@@ -69,6 +69,6 @@ function suiteRun(agentSpec: AgentSpec, runId: string, score: number): SuiteRunR
 		agent: agentSpec,
 		suite: { id: "suite", name: "Suite", tasks: [task] },
 		runs: [{ runId, agent: agentSpec, task, status: score === 1 ? "passed" : "failed", score: { score, maxScore: 1, passed: score === 1, reason: "ok" }, startedAt: 1, endedAt: 2, durationMs: 1, trace: [] }],
-		summary: { totalTasks: 1, passedTasks: score, failedTasks: score === 1 ? 0 : 1, erroredTasks: 0, timeoutTasks: 0, passRate: score, totalScore: score, maxScore: 1, averageScore: score, totalDurationMs: 1, byTaskType: {} },
+		summary: { totalTasks: 1, passedTasks: score, failedTasks: score === 1 ? 0 : 1, erroredTasks: 0, timeoutTasks: 0, interruptedTasks: 0, passRate: score, totalScore: score, maxScore: 1, averageScore: score, totalDurationMs: 1, byTaskType: {} },
 	};
 }

@@ -69,6 +69,7 @@ function suiteRun(agentSpec: AgentSpec, runs: SuiteRunResult["runs"]): SuiteRunR
 			failedTasks: runs.filter((item) => item.status === "failed").length,
 			erroredTasks: 0,
 			timeoutTasks: 0,
+			interruptedTasks: 0,
 			passRate: runs.filter((item) => item.status === "passed").length / 2,
 			totalScore: runs.reduce((sum, item) => sum + item.score.score, 0),
 			maxScore: 2,

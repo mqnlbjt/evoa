@@ -50,7 +50,7 @@ describe("runtime event observer", () => {
 
 		await runtime.runSession(session);
 
-		expect(observed.map((event) => event.type)).toEqual(["model_request", "model_response"]);
+		expect(observed.map((event) => event.type)).toEqual(["context_view", "model_request", "model_response"]);
 		expect(observed).toEqual(session.trace);
 	});
 
@@ -67,7 +67,7 @@ describe("runtime event observer", () => {
 
 		await runtime.runSession(session);
 
-		expect(observed.map((event) => event.type)).toEqual(["model_request", "model_response", "tool_call", "tool_result", "model_request", "model_response"]);
+		expect(observed.map((event) => event.type)).toEqual(["context_view", "model_request", "model_response", "tool_call", "tool_result", "context_view", "model_request", "model_response"]);
 		expect(observed).toEqual(session.trace);
 	});
 
@@ -82,7 +82,7 @@ describe("runtime event observer", () => {
 		const output = await runtime.runSession(session);
 
 		expect(output.answer).toBe("answer");
-		expect(session.trace.map((event) => event.type)).toEqual(["model_request", "model_response"]);
+		expect(session.trace.map((event) => event.type)).toEqual(["context_view", "model_request", "model_response"]);
 	});
 });
 

@@ -52,7 +52,7 @@ function suite(runs: AgentTaskRunResult[]): SuiteRunResult {
 		suite: { id: "suite-1", name: "Suite", tasks: runs.map((item) => item.task) },
 		agent,
 		runs,
-		summary: { totalTasks: runs.length, passedTasks: 0, failedTasks: 0, erroredTasks: 0, timeoutTasks: 0, passRate: 0, totalScore: 0, maxScore: runs.length, averageScore: 0, totalDurationMs: 0, byTaskType: {} },
+		summary: { totalTasks: runs.length, passedTasks: 0, failedTasks: 0, erroredTasks: 0, timeoutTasks: 0, interruptedTasks: 0, passRate: 0, totalScore: 0, maxScore: runs.length, averageScore: 0, totalDurationMs: 0, byTaskType: {} },
 	};
 }
 

@@ -125,6 +125,7 @@ function suite(runResult: AgentTaskRunResult): SuiteRunResult {
 			failedTasks: runResult.status === "failed" ? 1 : 0,
 			erroredTasks: runResult.status === "errored" ? 1 : 0,
 			timeoutTasks: runResult.status === "timeout" ? 1 : 0,
+			interruptedTasks: runResult.status === "interrupted" ? 1 : 0,
 			passRate: runResult.status === "passed" ? 1 : 0,
 			totalScore: runResult.score.score,
 			maxScore: 1,

@@ -43,7 +43,7 @@ describe("trace replay", () => {
 			suite: { id: "suite-1", name: "Suite", tasks: [task] },
 			agent,
 			runs: [runResult("run-1", events([["run_start", "e1", 1, {}], ["run_end", "e2", 2, {}]]))],
-			summary: { totalTasks: 1, passedTasks: 1, failedTasks: 0, erroredTasks: 0, timeoutTasks: 0, passRate: 1, totalScore: 1, maxScore: 1, averageScore: 1, totalDurationMs: 1, byTaskType: {} },
+			summary: { totalTasks: 1, passedTasks: 1, failedTasks: 0, erroredTasks: 0, timeoutTasks: 0, interruptedTasks: 0, passRate: 1, totalScore: 1, maxScore: 1, averageScore: 1, totalDurationMs: 1, byTaskType: {} },
 		};
 
 		expect(extractReplayInputs(suite)).toHaveLength(1);

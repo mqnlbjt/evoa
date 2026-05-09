@@ -28,6 +28,7 @@ describe("JsonlRunStore", () => {
 				failedTasks: 0,
 				erroredTasks: 0,
 				timeoutTasks: 0,
+				interruptedTasks: 0,
 				passRate: 1,
 				totalScore: 1,
 				maxScore: 1,

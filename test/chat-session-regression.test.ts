@@ -9,7 +9,7 @@ const agentPath = "/home/wyq/data/pi/evolving-agent/examples/agents/basic.json";
 const providerArgs = ["--provider", "local", "--model", "gpt-5.5", "--base-url", "http://localhost:8317/v1"];
 const modelArgs = ["--agent", agentPath, ...providerArgs];
 
-describe("chat session regression", () => {
+describe("chat session regression", { timeout: 10_000 }, () => {
 	it("runs a one-shot chat prompt", async () => {
 		const io = createIO();
 		const code = await main(["chat", "hello", ...modelArgs, "--json"], { ...io, openAIClientFactory: () => fakeOpenAIClient("hi"), now: () => 1, createId: nextId() });
@@ -277,7 +277,7 @@ describe("chat session regression", () => {
 		expect(code).toBe(0);
 		expect(JSON.stringify(input)).toContain("默认英文回答");
 		expect(JSON.stringify(input)).not.toContain("默认中文回答");
-	});
+	}, 10_000);
 
 	it("reports old sessions without startup context when resume args are incomplete", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));

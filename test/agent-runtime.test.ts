@@ -1,5 +1,10 @@
+import { readFile } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/runtime/agent-runtime.js";
+import { appendUserMessage, createAgentSession } from "../src/runtime/session.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import type { ModelClient, ModelRequest } from "../src/models/types.js";
 import type { AgentSpec, TaskSpec } from "../src/specs.js";
@@ -38,8 +43,55 @@ describe("AgentRuntime", () => {
 
 		expect(output.answer).toBe("hi");
 		expect(seenSessionId).toBe("id-1");
-		expect(output.trace?.map((event) => event.type)).toEqual(["model_request", "model_response"]);
-		expect(output.trace?.[0]?.payload).toMatchObject({ purpose: "main" });
+		expect(output.trace?.map((event) => event.type)).toEqual(["context_view", "model_request", "model_response"]);
+		expect(output.trace?.[1]?.payload).toMatchObject({ purpose: "main" });
+	});
+
+	it("continues with follow-up messages when the stopped turn provides one", async () => {
+		let turn = 0;
+		let delivered = false;
+		const seenRequests: ModelRequest[] = [];
+		const followUp = "continue if incomplete";
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenRequests.push(request);
+				turn += 1;
+				if (turn === 1) return { text: "Found the issue! Let me check:" };
+				return { text: "done" };
+			},
+		};
+		const runtime = new AgentRuntime({
+			modelClient,
+			createId: createIds(),
+			now: () => 1,
+			getFollowUpMessages: () => {
+				if (delivered) return [];
+				delivered = true;
+				return [{ role: "user", content: followUp }];
+			},
+		});
+
+		const output = await runtime.runTask(agent, task);
+
+		expect(output.answer).toBe("done");
+		expect(seenRequests).toHaveLength(2);
+		expect(seenRequests[1]?.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user", content: followUp })]));
+		expect(output.trace?.map((event) => event.type)).toContain("follow_up");
+	});
+
+	it("stops when the stopped turn has no follow-up messages", async () => {
+		const seenRequests: ModelRequest[] = [];
+		const modelClient: ModelClient = {
+			async complete(request) {
+				seenRequests.push(request);
+				return { text: "done" };
+			},
+		};
+
+		const output = await new AgentRuntime({ modelClient, createId: createIds(), now: () => 1, getFollowUpMessages: () => [] }).runTask(agent, task);
+
+		expect(output.answer).toBe("done");
+		expect(seenRequests).toHaveLength(1);
 	});
 
 	it("uses coding purpose when enabled for coding tasks", async () => {
@@ -223,6 +275,39 @@ describe("AgentRuntime", () => {
 		});
 	});
 
+	it("persists tool results using resolved output budget", async () => {
+		let turn = 0;
+		const outputText = "x".repeat(5_000);
+		const storageDir = mkdtempSync(path.join(tmpdir(), "agent-runtime-persistence-"));
+		const modelClient: ModelClient = {
+			async complete() {
+				turn += 1;
+				if (turn === 1) return { toolCalls: [{ id: "call-1", name: "echo", input: "ok" }] };
+				return { text: "done" };
+			},
+		};
+		const registry = new ToolRegistry([
+			{
+				name: "echo",
+				description: "Echo input",
+				permission: { defaultDecision: "allow", riskLevel: "low" },
+				concurrency: "parallel-safe",
+				async execute() {
+					return outputText;
+				},
+			},
+		]);
+		const budgetAgent = { ...agent, runtime: { ...agent.runtime, toolOutputBudget: { perTool: { echo: { maxBytes: 4_000 } } } } };
+
+		const output = await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1, toolResultStorageDir: storageDir }).runTask(budgetAgent, task);
+		const result = output.trace?.find((event) => event.type === "tool_result")?.payload as { output?: string } | undefined;
+		const persistedPath = result?.output?.match(/saved to:\n(.+)\nPreview/)?.[1];
+
+		expect(result?.output).toContain("<tool-result-preview>");
+		expect(persistedPath).toBeDefined();
+		expect(await readFile(persistedPath!, "utf8")).toBe(outputText);
+	});
+
 	it("uses provider input tokens plus trailing entries for the next turn estimate", async () => {
 		let turn = 0;
 		const seenRequests: ModelRequest[] = [];
@@ -310,6 +395,45 @@ describe("AgentRuntime", () => {
 		const runtime = new AgentRuntime({ modelClient, createId: createIds(), now: () => 1 });
 
 		await expect(runtime.runTask({ ...agent, runtime: { maxTurns: 1, timeoutMs: 1 } }, task)).rejects.toThrow("timed out");
+	});
+
+	it("stops before model work when the signal is already aborted", async () => {
+		let called = false;
+		const controller = new AbortController();
+		controller.abort(new Error("User interrupted"));
+		const runtime = new AgentRuntime({
+			modelClient: { async complete() { called = true; return { text: "no" }; } },
+			createId: createIds(),
+			now: () => 1,
+		});
+		const session = createAgentSession({ id: "session", agent, task });
+		appendUserMessage(session, task.prompt);
+
+		await expect(runtime.runSession(session, controller.signal)).rejects.toThrow("User interrupted");
+		expect(called).toBe(false);
+		expect(session.trace).toEqual([]);
+	});
+
+	it("aborts tool execution without returning a model-visible tool error", async () => {
+		let modelCalls = 0;
+		const controller = new AbortController();
+		const runtime = new AgentRuntime({
+			modelClient: {
+				async complete() {
+					modelCalls += 1;
+					return { toolCalls: [{ id: "call-1", name: "echo", input: "stop" }] };
+				},
+			},
+			toolRegistry: new ToolRegistry([{ name: "echo", description: "Echo input", permission: { defaultDecision: "allow", riskLevel: "low" }, concurrency: "parallel-safe", async execute(_input, signal) { controller.abort(new Error("User interrupted")); throw signal?.reason; } }]),
+			createId: createIds(),
+			now: () => 1,
+		});
+		const session = createAgentSession({ id: "session", agent, task });
+		appendUserMessage(session, task.prompt);
+
+		await expect(runtime.runSession(session, controller.signal)).rejects.toThrow("User interrupted");
+		expect(modelCalls).toBe(1);
+		expect(session.trace.map((event) => event.type)).toEqual(["context_view", "model_request", "model_response", "tool_call"]);
 	});
 
 	it("does not expose denied tools to the model", async () => {

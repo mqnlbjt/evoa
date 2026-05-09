@@ -26,7 +26,7 @@ describe("stdio MCP client smoke", () => {
 		try {
 			const result = await new AgentRuntime({ modelClient: echoToolModel(), toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask(agent, task);
 			expect(result.answer).toBe("done");
-			expect(result.trace?.map((event) => event.type)).toEqual(["model_request", "model_response", "tool_call", "tool_result", "model_request", "model_response"]);
+			expect(result.trace?.map((event) => event.type)).toEqual(["context_view", "model_request", "model_response", "tool_call", "tool_result", "context_view", "model_request", "model_response"]);
 			expect(result.trace).toEqual(expect.arrayContaining([
 				expect.objectContaining({ type: "tool_call", payload: expect.objectContaining({ call: expect.objectContaining({ name: "mcp__smoke__echo" }) }) }),
 				expect.objectContaining({
