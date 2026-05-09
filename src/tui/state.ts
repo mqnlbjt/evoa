@@ -1,9 +1,10 @@
+import type { ContextViewPayload } from "../runtime/events.js";
 import type { ModelResponse } from "../models/types.js";
 import type { TraceEvent } from "../runtime/events.js";
 import type { ToolCall, ToolResult } from "../tools/registry.js";
 import { TuiStatsAccumulator } from "./stats.js";
 import { renderToolCall, renderToolResultText } from "./tool-renderers.js";
-import type { ChatLogEntry, ChatLogSeverity, RunningToolEntry, TuiStateOptions, TuiStateSnapshot, TuiStatus, TuiView } from "./types.js";
+import type { ChatLogEntry, ChatLogSeverity, ContextUsage, RunningToolEntry, TuiStateOptions, TuiStateSnapshot, TuiStatus, TuiView } from "./types.js";
 
 const DEFAULT_MAX_LOG_ENTRIES = 200;
 const DEFAULT_MAX_TRACE_EVENTS = 500;
@@ -28,6 +29,7 @@ export class TuiState {
 	private readonly createId: () => string;
 	private currentModel: string;
 	private currentProvider: string;
+	private contextUsage: ContextUsage | undefined;
 
 	constructor(private options: TuiStateOptions) {
 		this.now = options.now ?? Date.now;
@@ -44,6 +46,7 @@ export class TuiState {
 			model: this.currentModel,
 			provider: this.currentProvider,
 			toolProfile: this.options.toolProfile,
+			mcpServerCount: this.options.mcpServerCount ?? 0,
 			cwd: this.options.cwd,
 			sessionId: this.options.sessionId,
 			...(this.options.maxToolCalls === undefined ? {} : { maxToolCalls: this.options.maxToolCalls }),
@@ -62,6 +65,7 @@ export class TuiState {
 			log: [...this.log],
 			runningTools: Array.from(this.runningTools.values()),
 			trace: [...this.trace],
+			...(this.contextUsage ? { contextUsage: this.contextUsage } : {}),
 		};
 	}
 
@@ -84,6 +88,7 @@ export class TuiState {
 		this.toolDurationMs = 0;
 		this.mcpDurationMs = 0;
 		this.skillDurationMs = 0;
+		this.contextUsage = undefined;
 	}
 
 	addUserMessage(text: string): void {
@@ -123,9 +128,21 @@ export class TuiState {
 		else if (event.type === "tool_call") this.applyToolCall(event);
 		else if (event.type === "tool_result") this.applyToolResult(event);
 		else if (event.type === "score") this.addLog({ kind: "score", text: summarizePayload(event.payload), severity: "info" });
-		else if (event.type === "response_truncated") this.addLog({ kind: "error", text: `⚠ 模型输出被截断 (${summarizePayload(event.payload)})`, severity: "warning" });
+		else if (event.type === "interrupted") this.addSystemMessage("Turn interrupted");
+		else if (event.type === "response_truncated") this.addLog({ kind: "error", text: `⚠ model output truncated (${summarizePayload(event.payload)})`, severity: "warning" });
+		else if (event.type === "context_view") this.applyContextView(event);
 		else if (event.type === "run_end") this.applyRunEnd(event);
 		else if (event.type === "error") this.addError(errorMessage(event.payload));
+	}
+
+	private applyContextView(event: TraceEvent): void {
+		const payload = event.payload as ContextViewPayload;
+		this.contextUsage = {
+			tokenEstimate: payload.tokenEstimate,
+			budgetMaxTokens: payload.budgetMaxTokens,
+			effectiveLimit: payload.effectiveLimit,
+			usageFraction: payload.usageFraction,
+		};
 	}
 
 	private applyRunStart(event: TraceEvent): void {

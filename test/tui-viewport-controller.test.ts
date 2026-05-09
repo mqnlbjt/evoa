@@ -46,6 +46,7 @@ function snapshot(activeView: TuiView, runningToolCount = 0): TuiStateSnapshot {
 		model: "model",
 		provider: "provider",
 		toolProfile: "coding",
+		mcpServerCount: 0,
 		cwd: ".",
 		sessionId: "session",
 		status: "idle",

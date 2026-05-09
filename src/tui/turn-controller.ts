@@ -1,5 +1,6 @@
 import type { ChatServiceContext } from "../cli/chat-service.js";
 import { runChatTurn } from "../cli/chat-service.js";
+import { isAbortError } from "../runtime/timeout.js";
 import type { TuiState } from "./state.js";
 import { handleSlashCommand } from "./slash-commands.js";
 import type { TuiView } from "./types.js";
@@ -16,6 +17,7 @@ export interface TuiTurnControllerOptions {
 export class TuiTurnController {
 	private busy = false;
 	private busyNoticeShown = false;
+	private activeTurnController: AbortController | undefined;
 
 	constructor(private readonly options: TuiTurnControllerOptions) {}
 
@@ -26,6 +28,13 @@ export class TuiTurnController {
 	cancelInput(): void {
 		this.options.state.addSystemMessage("Input cancelled");
 		this.options.onRenderRequested();
+	}
+
+	interruptTurn(): boolean {
+		if (!this.busy || !this.activeTurnController) return false;
+		this.activeTurnController.abort(new Error("User interrupted"));
+		this.options.onRenderRequested();
+		return true;
 	}
 
 	async submit(input: string): Promise<void> {
@@ -69,14 +78,18 @@ export class TuiTurnController {
 		this.options.onViewChanged("chat");
 		this.options.state.addUserMessage(input);
 		this.options.onRenderRequested();
+		this.activeTurnController = new AbortController();
 		try {
-			await runChatTurn(this.options.chat, input);
+			await runChatTurn(this.options.chat, input, this.activeTurnController.signal);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			if (!this.options.state.hasErrorMessage(message)) this.options.state.addError(message);
+			if (!isAbortError(error, this.activeTurnController.signal)) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (!this.options.state.hasErrorMessage(message)) this.options.state.addError(message);
+			}
 		} finally {
 			this.busy = false;
 			this.busyNoticeShown = false;
+			this.activeTurnController = undefined;
 			this.options.onRenderRequested();
 		}
 	}

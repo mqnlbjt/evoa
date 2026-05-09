@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InteractiveMode } from "../src/tui/interactive-mode.js";
 import { FakeTerminal } from "../src/tui/fake-terminal.js";
+import { ToolRegistry } from "../src/tools/registry.js";
 import { fakeOpenAIClient, fakeQueuedOpenAIClient, fakeToolOpenAIClient, nextId } from "./helpers/cli.js";
 
 function frameText(terminal: FakeTerminal): string {
@@ -32,6 +33,21 @@ describe("InteractiveMode", () => {
 		terminal.emitInput("\n");
 		await expect(exit).resolves.toBe(0);
 		expect(terminal.isDisposed()).toBe(true);
+	});
+
+	it("renders configured MCP server count in the header", async () => {
+		const terminal = new FakeTerminal({ width: 120, height: 8 });
+		const mode = new InteractiveMode({
+			terminal,
+			command: { kind: "tui", format: "human", agentPath, provider: "local", model: "gpt-5.5", baseURL: "http://localhost:8317/v1", providerFormat: "openai-responses", toolProfile: "dangerous", mcpServers: { docs: { type: "stdio", command: "node" } }, providedFlags: { agentPath: true, provider: true, model: true, baseURL: true } },
+			deps: { openAIClientFactory: () => fakeOpenAIClient("hi"), toolRegistry: new ToolRegistry(), now: () => 1, createId: nextId() },
+			now: () => 1,
+		});
+		const exit = mode.start();
+		await waitFor(() => frameText(terminal).includes("profile: dangerous | mcp: 1"));
+		terminal.emitInput("/exit");
+		terminal.emitInput("\n");
+		await expect(exit).resolves.toBe(0);
 	});
 
 	it("keeps the terminal cursor on the input line", async () => {
@@ -147,6 +163,36 @@ describe("InteractiveMode", () => {
 		expect((frameText(terminal).match(/A turn is already running/g) ?? []).length).toBe(1);
 		releaseFirstRequest();
 		await waitFor(() => frameText(terminal).includes("┃ LLM  done") && frameText(terminal).includes("status: done"));
+		terminal.emitInput("/exit");
+		terminal.emitInput("\n");
+		await expect(exit).resolves.toBe(0);
+	});
+
+	it("interrupts a running turn with Ctrl-C without exiting", async () => {
+		const terminal = new FakeTerminal();
+		const requestStarted = defer<void>();
+		let capturedSignal: AbortSignal | undefined;
+		const mode = new InteractiveMode({
+			terminal,
+			command: { kind: "tui", format: "human", agentPath: noMemoryAgentPath, provider: "local", model: "gpt-5.5", baseURL: "http://localhost:8317/v1", providerFormat: "openai-responses", toolProfile: "dangerous", providedFlags: { agentPath: true, provider: true, model: true, baseURL: true } },
+			deps: {
+				openAIClientFactory: () => ({ responses: { async create(_params: unknown, options?: { signal?: AbortSignal }) { capturedSignal = options?.signal; requestStarted.resolve(); return await new Promise((_, reject) => capturedSignal?.addEventListener("abort", () => reject(capturedSignal?.reason), { once: true })); } } }),
+				now: () => 1,
+				createId: nextId(),
+			},
+			now: () => 1,
+		});
+		const exit = mode.start();
+		await waitFor(() => terminal.outputText().includes("evolving-agent"));
+		terminal.emitInput("long");
+		terminal.emitInput("\n");
+		await requestStarted.promise;
+
+		terminal.emitInput("\u0003");
+
+		await waitFor(() => frameText(terminal).includes("Turn interrupted") && frameText(terminal).includes("status: done"));
+		expect(capturedSignal?.aborted).toBe(true);
+		expect(frameText(terminal)).not.toContain("error:");
 		terminal.emitInput("/exit");
 		terminal.emitInput("\n");
 		await expect(exit).resolves.toBe(0);

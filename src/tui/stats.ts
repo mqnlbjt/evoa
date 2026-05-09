@@ -83,6 +83,7 @@ export interface TuiStatsSnapshot {
 		latestTurnUsage?: ModelTurnUsageSnapshot;
 		compactionCount: number;
 		contextTokens?: number;
+		contextView?: { tokenEstimate: number; budgetMaxTokens: number; effectiveLimit: number; usageFraction: number };
 	};
 	tools: {
 		callCount: number;
@@ -145,6 +146,7 @@ export class TuiStatsAccumulator {
 	private readonly turnUsageHistory: ModelTurnUsageSnapshot[] = [];
 	private compactionCount = 0;
 	private latestContextTokens: number | undefined;
+	private latestContextView: { tokenEstimate: number; budgetMaxTokens: number; effectiveLimit: number; usageFraction: number } | undefined;
 	private pendingModelStartedAt: number | undefined;
 	private toolCallCount = 0;
 	private toolResultCount = 0;
@@ -174,6 +176,7 @@ export class TuiStatsAccumulator {
 		else if (event.type === "tool_call") this.applyToolCall(event);
 		else if (event.type === "tool_result") this.applyToolResult(event);
 		else if (event.type === "score") this.applyScore(event);
+		else if (event.type === "context_view") this.applyContextView(event);
 		else if (event.type === "context_compaction") this.applyContextCompaction(event);
 		else if (event.type === "micro_compact") this.applyMicroCompact(event);
 		else if (event.type === "error") this.applyError(event.payload);
@@ -258,6 +261,23 @@ export class TuiStatsAccumulator {
 		this.addToolCategoryStats(result.name, durationMs);
 	}
 
+	private applyContextView(event: TraceEvent): void {
+		const payload = objectRecord(event.payload);
+		const tokenEstimate = numberField(payload, "tokenEstimate");
+		const budgetMaxTokens = numberField(payload, "budgetMaxTokens");
+		const effectiveLimit = numberField(payload, "effectiveLimit");
+		const usageFraction = numberField(payload, "usageFraction");
+		if (tokenEstimate !== undefined && budgetMaxTokens !== undefined) {
+			this.latestContextTokens = tokenEstimate;
+			this.latestContextView = {
+				tokenEstimate,
+				budgetMaxTokens,
+				effectiveLimit: effectiveLimit ?? budgetMaxTokens,
+				usageFraction: usageFraction ?? (tokenEstimate / budgetMaxTokens),
+			};
+		}
+	}
+
 	private applyContextCompaction(event: TraceEvent): void {
 		this.compactionCount += 1;
 		const payload = objectRecord(event.payload);
@@ -318,6 +338,7 @@ export class TuiStatsAccumulator {
 			...(this.turnUsageHistory.length === 0 ? {} : { latestTurnUsage: this.turnUsageHistory[this.turnUsageHistory.length - 1] }),
 			compactionCount: this.compactionCount,
 			...(this.latestContextTokens === undefined ? {} : { contextTokens: this.latestContextTokens }),
+			...(this.latestContextView ? { contextView: this.latestContextView } : {}),
 		};
 	}
 

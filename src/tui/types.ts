@@ -32,6 +32,7 @@ export interface TuiStateOptions {
 	model: string;
 	provider: string;
 	toolProfile: string;
+	mcpServerCount?: number;
 	cwd: string;
 	sessionId: string;
 	maxToolCalls?: number;
@@ -41,7 +42,15 @@ export interface TuiStateOptions {
 	createId?: () => string;
 }
 
-export interface TuiStateSnapshot extends Omit<TuiStateOptions, "now" | "createId"> {
+export interface ContextUsage {
+	tokenEstimate: number;
+	budgetMaxTokens: number;
+	effectiveLimit: number;
+	usageFraction: number;
+}
+
+export interface TuiStateSnapshot extends Omit<TuiStateOptions, "now" | "createId" | "mcpServerCount"> {
+	mcpServerCount: number;
 	status: TuiStatus;
 	turnCount: number;
 	toolCallCount: number;
@@ -57,6 +66,7 @@ export interface TuiStateSnapshot extends Omit<TuiStateOptions, "now" | "createI
 	log: ChatLogEntry[];
 	runningTools: RunningToolEntry[];
 	trace: TraceEvent[];
+	contextUsage?: ContextUsage;
 }
 
 export interface RenderContext {

@@ -87,9 +87,19 @@ export class InteractiveMode {
 		}
 		for (const action of this.input.handleInput(chunk)) {
 			if (action.type === "changed") this.renderScheduler?.request();
-			else if (action.type === "cancel") this.turnController?.cancelInput();
-			else if (action.type === "exit") this.stop();
+			else if (action.type === "cancel") this.handleCancelInput();
+			else if (action.type === "exit") this.handleExitInput();
 			else if (action.type === "submit") await this.turnController?.submit(action.value.trim());
 		}
+	}
+
+	private handleCancelInput(): void {
+		if (this.turnController?.interruptTurn()) return;
+		this.turnController?.cancelInput();
+	}
+
+	private handleExitInput(): void {
+		if (this.turnController?.interruptTurn()) return;
+		this.stop();
 	}
 }

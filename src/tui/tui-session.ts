@@ -39,6 +39,7 @@ function tuiStateOptions(chat: ChatServiceContext, options: TuiSessionOptions): 
 		model: chat.agent.model.model,
 		provider: chat.agent.model.provider,
 		toolProfile: chat.command.toolProfile,
+		mcpServerCount: Object.keys(chat.command.mcpServers ?? {}).length,
 		cwd: process.cwd(),
 		sessionId: chat.sessionId,
 		...(chat.agent.tools.maxToolCalls === undefined ? {} : { maxToolCalls: chat.agent.tools.maxToolCalls }),

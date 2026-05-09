@@ -7,12 +7,12 @@ import type { TraceEvent } from "../src/runtime/events.js";
 
 describe("slash commands", () => {
 	it("handles help clear status tools memory trace and exit", async () => {
-		const state = new TuiState({ agentName: "Agent", agentId: "agent", model: "model", provider: "provider", toolProfile: "coding", cwd: ".", sessionId: "session" });
+		const state = new TuiState({ agentName: "Agent", agentId: "agent", model: "model", provider: "provider", toolProfile: "coding", mcpServerCount: 2, cwd: ".", sessionId: "session" });
 		state.addUserMessage("hello");
 		const context = { state, chat: fakeChat(), stop: () => { stopped = true; }, newSession: async () => "new-session" };
 		let stopped = false;
 		expect((await handleSlashCommand("/help", context)).message).toContain("/new");
-		expect((await handleSlashCommand("/status", context)).message).toContain("session");
+		expect((await handleSlashCommand("/status", context)).message).toContain("mcp servers: 2");
 		expect((await handleSlashCommand("/tools", context)).message).toContain("echo");
 		expect((await handleSlashCommand("/memory", context)).message).toContain("disabled");
 		expect((await handleSlashCommand("/stats", context)).message).toBeUndefined();

@@ -15,8 +15,9 @@ export function renderTui(snapshot: TuiStateSnapshot, input: InputEditor, contex
 }
 
 function renderHeader(snapshot: TuiStateSnapshot, width: number): string[] {
+	const mcpLabel = snapshot.mcpServerCount > 0 ? ` | mcp: ${snapshot.mcpServerCount}` : "";
 	return [
-		truncate(`evolving-agent | ${snapshot.agentName} (${snapshot.agentId}) | model: ${snapshot.provider}/${snapshot.model} | profile: ${snapshot.toolProfile}`, width),
+		truncate(`evolving-agent | ${snapshot.agentName} (${snapshot.agentId}) | model: ${snapshot.provider}/${snapshot.model} | profile: ${snapshot.toolProfile}${mcpLabel}`, width),
 		truncate(`session: ${snapshot.sessionId} | cwd: ${snapshot.cwd}`, width),
 		separator(width),
 	];
@@ -75,6 +76,7 @@ function renderStatsView(snapshot: TuiStateSnapshot): string[] {
 		"TOKENS",
 		[`input: ${stats.model.tokens.inputTokens}`, `output: ${stats.model.tokens.outputTokens}`, `reasoning: ${stats.model.tokens.reasoningTokens}`, `cache read: ${stats.model.tokens.cacheReadTokens}`, `cache write: ${stats.model.tokens.cacheWriteTokens}`, `total: ${stats.model.tokens.totalTokens}`, `cost: ${formatCost(stats.model.tokens.costUsd)}`].join(" | "),
 			...(stats.model.latestTurnUsage ? [`latest turn #${stats.model.latestTurnUsage.turn} (${stats.model.latestTurnUsage.purpose}/${stats.model.latestTurnUsage.source}): in=${stats.model.latestTurnUsage.inputTokens} out=${stats.model.latestTurnUsage.outputTokens} total=${stats.model.latestTurnUsage.totalTokens}`] : []),
+			...(stats.model.contextView ? [`context usage: ${formatTokenCount(stats.model.contextView.tokenEstimate)}/${formatTokenCount(stats.model.contextView.budgetMaxTokens)} (${(stats.model.contextView.usageFraction * 100).toFixed(1)}%)`] : []),
 		"",
 		"MODEL LATENCY",
 		[`calls: ${stats.model.responseCount}`, `avg: ${formatOptionalMs(stats.model.latency.avgMs)}`, `min: ${formatOptionalMs(stats.model.latency.minMs)}`, `max: ${formatOptionalMs(stats.model.latency.maxMs)}`, `p50: ${formatOptionalMs(stats.model.latency.p50Ms)}`, `p95: ${formatOptionalMs(stats.model.latency.p95Ms)}`, `p99: ${formatOptionalMs(stats.model.latency.p99Ms)}`, `tok/s: ${formatRate(stats.model.outputTokensPerSecond)}`, `ttft: ${formatOptionalMs(stats.model.ttftMs)}`].join(" | "),
@@ -150,7 +152,7 @@ function renderFooter(snapshot: TuiStateSnapshot, context: RenderContext): strin
 	const maxTools = snapshot.maxToolCalls === undefined ? "-" : String(snapshot.maxToolCalls);
 	return [
 		separator(context.width),
-		[`status: ${context.inputBlocked ? "busy" : snapshot.status}`, `view: ${snapshot.activeView}`, `runs: ${snapshot.stats.runs.count}`, `turns: ${snapshot.turnCount}`, `tools: ${snapshot.toolCallCount}/${maxTools}`, ...renderTiming(snapshot, context), `in: ${snapshot.stats.model.tokens.inputTokens}`, `out: ${snapshot.stats.model.tokens.outputTokens}`, ...(snapshot.stats.model.contextTokens === undefined ? [] : [`ctx: ${snapshot.stats.model.contextTokens}`]), `model: ${formatOptionalMs(snapshot.stats.model.latency.avgMs)} avg`, ...(snapshot.runningToolName ? [`running: ${snapshot.runningToolName}`] : [])].join(" | "),
+		[`status: ${context.inputBlocked ? "busy" : snapshot.status}`, `view: ${snapshot.activeView}`, `runs: ${snapshot.stats.runs.count}`, `turns: ${snapshot.turnCount}`, `tools: ${snapshot.toolCallCount}/${maxTools}`, ...renderTiming(snapshot, context), `in: ${snapshot.stats.model.tokens.inputTokens}`, `out: ${snapshot.stats.model.tokens.outputTokens}`, ...renderContextUsage(snapshot), `model: ${formatOptionalMs(snapshot.stats.model.latency.avgMs)} avg`, ...(snapshot.runningToolName ? [`running: ${snapshot.runningToolName}`] : [])].join(" | "),
 		...(snapshot.lastError ? [`error: ${snapshot.lastError}`] : []),
 	];
 }
@@ -171,6 +173,22 @@ function formatMs(value: number): string {
 
 function formatOptionalMs(value: number | undefined): string {
 	return value === undefined ? "-" : formatMs(value);
+}
+
+function formatTokenCount(value: number): string {
+	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+	return String(value);
+}
+
+function renderContextUsage(snapshot: TuiStateSnapshot): string[] {
+	const usage = snapshot.contextUsage ?? snapshot.stats.model.contextView;
+	if (!usage) {
+		if (snapshot.stats.model.contextTokens === undefined) return [];
+		return [`ctx: ${snapshot.stats.model.contextTokens}`];
+	}
+	const fraction = (usage.usageFraction * 100).toFixed(1);
+	return [`ctx: ${formatTokenCount(usage.tokenEstimate)}/${formatTokenCount(usage.budgetMaxTokens)} (${fraction}%)`];
 }
 
 function formatCost(value: number | undefined): string {

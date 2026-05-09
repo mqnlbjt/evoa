@@ -78,6 +78,7 @@ function statusText(context: SlashCommandContext): string {
 		`agent: ${snapshot.agentName} (${snapshot.agentId})`,
 		`model: ${snapshot.provider}/${snapshot.model}`,
 		`profile: ${snapshot.toolProfile}`,
+		`mcp servers: ${snapshot.mcpServerCount}`,
 		`status: ${snapshot.status}`,
 		`view: ${snapshot.activeView}`,
 		`turns: ${snapshot.turnCount}`,
