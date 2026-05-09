@@ -1,8 +1,8 @@
-# evolving-agent 阶段性记录
+# evolving-agent 阶段性记录（2026-05-07）
 
 ## 当前阶段目标
 
-本阶段目标是把 `evolving-agent` 从“Agent 规格 + Benchmark 骨架”推进到一个可以直接启动、可以对话、可以保存 session、可以评测、可以接入本地 OpenAI/Anthropic 兼容服务的最小 agent runtime。
+把 `evolving-agent` 从”Agent 规格 + Benchmark 骨架”推进到一个可以直接启动、可以对话、可以保存 session、可以评测、可以接入本地 OpenAI/Anthropic 兼容服务、具备 TUI 交互界面、支持上下文压缩和记忆管理的通用 Agent runtime。
 
 参考方向：
 
@@ -14,40 +14,59 @@
 
 ### 1. Runtime 基础
 
-新增/实现：
+文件：
 
-- `src/runtime/agent-runtime.ts`
-- `src/runtime/session.ts`
-- `src/runtime/loop.ts`
-- `src/runtime/events.ts`
-- `src/models/types.ts`
+- `src/runtime/agent-runtime.ts` — `AgentRuntime` 主入口
+- `src/runtime/loop.ts` — 多 turn loop，含 compaction/micro-compact/truncation 集成
+- `src/runtime/session.ts` — `AgentSession` 生命周期、session entry 管理、compaction entry
+- `src/runtime/events.ts` — RuntimeEventTrace：模型请求/响应、tool call/result
+- `src/runtime/budget.ts` — 上下文预算解析、token 估算、compaction 触发判断
+- `src/runtime/compaction.ts` — 上下文压缩（LLM 摘要合并）
+- `src/runtime/micro-compact.ts` — 微压缩（清理旧 tool result 内容）
+- `src/runtime/context-view.ts` — 上下文视图构建、硬裁剪/激进裁剪/关键裁剪/回退最小集合
+- `src/runtime/timeout.ts` — 超时控制
 
 当前能力：
 
 - `AgentRuntime` 实现 `AgentRuntimeExecutor`。
-- 支持创建 `AgentSession`。
+- 支持创建 `AgentSession`，管理 session entry 生命周期。
 - 支持将 `AgentSpec + TaskSpec` 转成模型请求。
 - 支持记录 `model_request`、`model_response`、`tool_call`、`tool_result` trace。
-- 支持多 turn loop。
+- 支持多 turn loop，含 `maxTurns` 和 `timeoutMs` 控制。
+- 支持上下文压缩：token 超阈值时自动触发 LLM 摘要压缩，保留近期 entries。
+- 支持微压缩：对旧 tool result 内容做轻量清理，仅保留近期工具输出。
+- 支持上下文裁剪：hard trim → aggressive trim → fallback minimal 三级裁剪策略。
+- 支持工具输出截断：head-tail / head-only 策略，UTF-8 安全字节截断。
 - 支持通过 `ModelClient` 抽象替换不同模型后端。
 
 ### 2. 工具系统与权限策略
 
-新增/实现：
+文件：
 
-- `src/tools/registry.ts`
-- `src/tools/policy.ts`
-- `src/tools/types.ts`
+- `src/tools/registry.ts` — 工具注册、执行、结果截断
+- `src/tools/policy.ts` — 权限策略
+- `src/tools/types.ts` — 工具类型定义
+- `src/tools/workspace.ts` — workspace 路径校验
+- `src/tools/read-only.ts` — 只读工具（read_file、list_dir、find_files、grep）
+- `src/tools/mutating.ts` — 可变工具（write_file、edit_file）
+- `src/tools/bash-executor.ts` — bash 执行器
+- `src/tools/sandbox.ts` — 工具沙箱约束
+- `src/tools/subagent.ts` — 子 agent 调用工具
+- `src/tools/profiles.ts` — tool profile（read-only/coding/benchmark-sandbox/dangerous）
+- `src/tools/truncation.ts` — 工具输出截断（UTF-8 安全字节截断）
+- `src/tools/web-fetch.ts` — Web 获取工具
 
 当前能力：
 
 - `ToolRegistry` 注册和执行工具。
 - `ToolDecision` 判断工具是否允许执行。
-- 支持 `allow` / `deny` / `ask`。
+- 支持 `allow` / `deny` / `ask` 三级权限。
 - `agent.tools.deniedTools` 优先级高于 allowed tools。
 - `task.allowedTools` 可以进一步收窄 agent 的工具权限。
 - 支持 `maxToolCalls` 限制。
 - 支持 runtime hooks：`beforeToolCall` / `afterToolResult`。
+- 工具输出自动截断（head-tail/head-only），防止超长输出撑爆上下文。
+- Web fetch 工具支持超时、输出截断和元数据返回。
 
 ### 3. Benchmark 与 Evolution 基础
 
@@ -204,202 +223,185 @@ response: ok
 
 这一步吸收了 pi 的结构化 assistant/toolResult message 思路，也为后续 Claude Code 风格 subagent sidechain transcript、fork context 和 verifier replay 打基础。
 
-### 10. 模型发现与轻量 ModelRegistry
+### 10. 模型发现、ModelRegistry 与模型路由
 
-新增：
+文件：
 
-- `src/models/provider-types.ts`
-- `src/models/discovery.ts`
-- `src/models/registry.ts`
-- `test/model-discovery.test.ts`
-- `test/model-registry.test.ts`
+- `src/models/provider-types.ts` — provider 类型定义
+- `src/models/discovery.ts` — OpenAI 兼容模型发现
+- `src/models/registry.ts` — `ModelRegistry` 注册/发现/创建 client
+- `src/models/router.ts` — 基于 purpose 的模型路由
+- `src/models/cache.ts` — 模型缓存
+- `src/models/types.ts` — provider-neutral 类型
+- `src/models/openai-client.ts` — OpenAI Responses API
+- `src/models/anthropic-client.ts` — Anthropic Messages API
 
 当前能力：
 
 - `discoverOpenAICompatibleModels` 支持 OpenAI 兼容 `/v1/models` 发现。
-- 支持 `http://localhost:8317/v1`、`http://localhost:8317`、`http://localhost:8317/v1/models` 的 URL 规范化，避免重复 `/v1` 或 `/models`。
-- 支持 API key、custom headers、custom fetch 和响应校验。
-- `ModelRegistry` 支持 provider 注册、模型发现、手动模型注册/覆盖、provider/model 列表、模型查询。
-- `ModelRegistry.createClient` 可创建 `openai-responses` 和 `anthropic-messages` 对应的现有 `ModelClient`。
-- Anthropic provider 当前支持手动注册和 client 创建，暂不支持自动模型发现。
+- 支持 URL 规范化，避免重复 `/v1` 或 `/models`。
+- `ModelRegistry` 支持 provider 注册、模型发现、手动注册、client 创建。
+- `ModelRegistry.createClient` 创建 `openai-responses` / `anthropic-messages` client。
+- **模型路由**: 支持 `aliases` 别名、`routes` 按 purpose 路由（main/compaction/summary/memory/extraction 等）、`purposeRules`（codingTasks/toolHeavy）智能路由。
+- Anthropic provider 支持手动注册和 client 创建，暂不支持自动模型发现。
 
-### 11. 最小 CLI 与示例文件
+### 11. CLI、Chat 与 TUI 交互
 
-新增：
+文件：
 
-- `src/cli.ts`
-- `src/cli/args.ts`
-- `src/cli/main.ts`
-- `src/cli/commands.ts`
-- `src/cli/format.ts`
-- `src/tasks/loader.ts`
-- `src/tasks/validation.ts`
-- `src/benchmark/loader.ts`
-- `src/benchmark/validation.ts`
-- `src/benchmark/grader.ts`
-- `examples/agents/basic.json`
-- `examples/tasks/smoke.json`
-- `examples/suites/smoke.json`
-- `examples/providers/local-openai.json`
-- `examples/README.md`
-- `test/cli-args.test.ts`
-- `test/cli-main.test.ts`
-- `test/task-loader.test.ts`
-- `test/benchmark-loader.test.ts`
-- `test/minimal-grader.test.ts`
-- `test/examples.test.ts`
+- `src/cli.ts` — CLI 入口
+- `src/cli/args.ts` — CLI 参数解析
+- `src/cli/main.ts` — CLI 主流程
+- `src/cli/commands.ts` — 子命令（chat/run/benchmark/evolve/models/tui）
+- `src/cli/format.ts` — 输出格式化
+- `src/cli/config.ts` — CLI 默认配置
+- `src/cli/chat-service.ts` — Chat 服务（session/memory/tools 编排）
+- `src/cli/model-routing.ts` — 模型路由 CLI 集成
+- `src/cli/tui-command.ts` — TUI 命令入口
+- `src/tui/` — 完整 TUI 系统（19 个文件）
 
 当前能力：
 
-- `evolving-agent models discover` 可通过 CLI 发现 OpenAI-compatible provider 的模型。
-- `evolving-agent run` 可加载 agent/task JSON，创建模型客户端并运行单个 task。
-- `evolving-agent benchmark` 可加载 suite/agent JSON 并运行 benchmark。
-- 当前还缺少面向用户的简单 `chat` 入口；用户开始对话仍需要 task JSON，这是下一阶段最高优先级。
-- CLI 支持 human/json 输出，`--json` 输出稳定机器可读 JSON。
-- CLI 支持 `--output` 和 `--trace` 显式写文件，默认不写。
-- 新增 task/suite loader 与 validator。
-- 新增 `MinimalTaskGrader`，支持 deterministic `exact` 与 `rubric.contains`。
-- 示例文件覆盖 local provider、basic agent、smoke task 和 smoke suite。
+- `evolving-agent chat "你好"` — 单次对话。
+- `evolving-agent chat` — 交互式连续对话。
+- `evolving-agent run` — 加载 agent/task JSON 运行单个 task。
+- `evolving-agent benchmark` — 加载 suite/agent JSON 运行 benchmark。
+- `evolving-agent evolve` — baseline/candidate 对比。
+- `evolving-agent models discover` — 模型发现。
+- `evolving-agent tui` — 启动轻量 TUI 交互模式。
+- `--session <id>` 保存 session，`--resume <id>` 恢复 session。
+- `--tool-profile` 指定工具配置，默认 dangerous。
+- `--json` 输出稳定机器可读 JSON。
+- `--report` 输出 benchmark/evolution JSON 或 Markdown report。
+- 默认 CLI 配置减少启动 agent 时必须传的参数数量。
 
-### 12. Workspace-scoped coding tools 与 tool profiles
+### 12. TUI 交互系统
 
-新增：
+文件（19 个）：
 
-- `src/tools/workspace.ts`
-- `src/tools/read-only.ts`
-- `src/tools/mutating.ts`
-- `src/tools/profiles.ts`
-- `test/read-only-tools.test.ts`
-- `test/mutating-tools.test.ts`
+- `src/tui/index.ts` — TUI 总入口
+- `src/tui/state.ts` — TUI 状态管理
+- `src/tui/renderer.ts` — 主渲染器
+- `src/tui/screen-renderer.ts` — 屏幕渲染
+- `src/tui/markdown.ts` — Markdown 渲染
+- `src/tui/bash-renderer.ts` — Bash 输出渲染
+- `src/tui/tool-renderers.ts` — 工具调用渲染
+- `src/tui/terminal.ts` — 终端接口抽象
+- `src/tui/process-terminal.ts` — 真实终端
+- `src/tui/fake-terminal.ts` — 测试用假终端
+- `src/tui/input-editor.ts` — 输入编辑器
+- `src/tui/interactive-mode.ts` — 交互模式
+- `src/tui/turn-controller.ts` — Turn 控制器
+- `src/tui/slash-commands.ts` — 斜杠命令
+- `src/tui/viewport-controller.ts` — 视口滚动控制
+- `src/tui/render-scheduler.ts` — 渲染调度
+- `src/tui/stats.ts` — 统计信息显示
+- `src/tui/tui-session.ts` — TUI 会话管理
+- `src/tui/types.ts` — TUI 类型定义
+
+### 13. MCP 工具集成
+
+文件（7 个）：
+
+- `src/mcp/types.ts` — MCP 类型定义
+- `src/mcp/client.ts` — MCP 客户端
+- `src/mcp/registry.ts` — MCP 工具注册
+- `src/mcp/adapter.ts` — MCP 适配器
+- `src/mcp/names.ts` — MCP 工具命名
+- `src/mcp/result.ts` — MCP 结果处理
+- `src/mcp/diagnostics.ts` — MCP 诊断
 
 当前能力：
 
-- read-only profile 内置 `read_file`、`list_dir`、`find_files`、`grep`。
-- coding profile 额外启用 `write_file`、`edit_file`。
-- benchmark-sandbox / dangerous profile 额外启用 `bash`。
-- CLI 新增 `--tool-profile <read-only|coding|benchmark-sandbox|dangerous>`，默认是 `dangerous`，让默认 agent 具备全部内置工具能力。
-- 文件工具限制在 workspace root 内，拒绝路径逃逸和 symlink 写入。
-- `edit_file` 使用 exact replacement，支持 all-or-nothing 多编辑与 `replaceAll`。
-- `bash` 支持 workspace cwd 校验、超时、输出上限和非零退出码结构化返回。
-- `benchmark-sandbox` 当前是 workspace/cwd 级约束，不是 OS/container 级沙箱。
+- 支持 MCP STDIO 和 HTTP 传输。
+- MCP 工具可注册到 `ToolRegistry`，受权限策略约束。
+- 支持 MCP 工具命名空间隔离。
 
-### 13. Benchmark report export
+### 14. 记忆管理
 
-新增：
+文件（10 个）：
 
-- `src/benchmark/report.ts`
-- `test/benchmark-report.test.ts`
+- `src/memory/types.ts` — 记忆类型定义
+- `src/memory/manager.ts` — 记忆管理器
+- `src/memory/tools.ts` — 记忆工具（save/recall/forget）
+- `src/memory/extractor.ts` — 记忆提取器
+- `src/memory/llm-extractor.ts` — LLM 驱动的记忆提取
+- `src/memory/json-memory-store.ts` — JSON 文件记忆存储
+- `src/memory/diff.ts` — 记忆差异比较
+- `src/memory/replay.ts` — 记忆重放
+- `src/memory/verifier.ts` — 记忆验证
+- `src/memory/resolution.ts` — 记忆冲突解决
 
 当前能力：
 
-- `createBenchmarkReport()` 可以从 `SuiteRunResult` 生成稳定 JSON DTO。
-- `formatBenchmarkReportMarkdown()` 可以生成适合人工阅读/PR 评论的 Markdown report。
-- CLI `benchmark` 新增 `--report <file>` 和 `--report-format <json|markdown>`。
-- `.md` / `.markdown` report path 会默认推断为 Markdown，其余默认 JSON。
-- `--output` 仍保持 compact JSON 输出语义，`--trace` 仍保持完整 run result 语义。
+- 支持 session 级和 long-term 记忆。
+- LLM 自动提取和合并记忆。
+- 记忆保存/召回/遗忘工具。
+- 记忆差异比较、重放和验证。
 
 ## 当前测试状态
 
 已通过：
 
 ```bash
-npm test
-npm run typecheck
-npm run build
-```
-
-当前测试数量：
-
-```txt
-25 test files
-127 tests passed
+npm test            # 68 test files, 421 tests passed, 1 skipped
+npm run typecheck   # 通过
+npm run build       # 通过
 ```
 
 ## 与 Claude Code 的区别
 
 ### Claude Code 是完整产品级 agent 系统
 
-Claude Code 具备：
+Claude Code 具备：CLI/TUI 交互、文件编辑、bash、MCP、hooks、skills、内置 subagents、自定义 agent 加载、权限系统、后台任务、worktree isolation、remote/fork/coordinator/team agent 能力、transcript、resume、task output 管理。
 
-- CLI/TUI 交互。
-- 文件编辑、bash、MCP、hooks、skills。
-- 内置 subagents：Explore、Plan、general-purpose、verification 等。
-- 自定义 agent 加载：`.claude/agents/*.md`、settings、plugin、policy。
-- 权限系统。
-- 后台任务。
-- worktree isolation。
-- remote/fork/coordinator/team agent 能力。
-- transcript、resume、task output 管理。
+### evolving-agent 已具备的能力
 
-### evolving-agent 当前不是 Claude Code 替代品
-
-当前 `evolving-agent` 只有核心框架能力，还不是顺手可用的对话型 Agent 产品：
-
-- runtime loop。
-- model client。
-- model registry。
-- 最小 CLI。
-- tool registry。
-- workspace-scoped read/write/edit/bash tools。
-- tool profiles。
-- benchmark。
-- benchmark JSON/Markdown report export。
-- evolution comparison。
-- evolution JSON/Markdown report export。
-- evolution history store。
-- trace replay summary / warnings。
-- run diff。
+- runtime loop（含多 turn、超时、上下文压缩、微压缩、上下文裁剪、工具输出截断）。
+- model client（OpenAI Responses / Anthropic Messages）。
+- model registry + model routing（purpose-based 路由）。
+- 完整 CLI（chat / run / benchmark / evolve / models / tui 子命令）。
+- TUI 交互界面（19 个文件，含 Markdown 渲染、bash 渲染、交互模式、斜杠命令等）。
+- tool registry（workspace/readonly/mutating/bash/subagent/web-fetch/MCP）。
+- tool profiles（read-only / coding / benchmark-sandbox / dangerous）。
+- tool output truncation（head-tail / head-only，UTF-8 安全）。
+- benchmark + JSON/Markdown report export。
+- evolution comparison + report export + history store。
+- trace replay + run diff。
 - verifier。
-- chat CLI / REPL。
-- session memory 保存/恢复。
-- session startup context resume。
+- session memory 保存/恢复 + JSON session store。
+- chat 服务 + session 生命周期管理。
+- agent/subagent 定义加载与验证。
+- 记忆管理（LLM 提取、保存/召回/遗忘、差异、重放、验证）。
+- MCP 集成（STDIO/HTTP，工具命名空间隔离）。
 - 默认 CLI 配置。
 
-还没有：
+### 还没有
 
-- TUI。
 - OS/container 级工具沙箱。
-- MCP。
-- hooks。
-- skills。
+- hooks、skills。
 - background task。
 - worktree isolation。
 - multi-agent coordinator。
+- Slack bot。
+- 完整 OAuth/AuthStorage。
 
-### 我们借鉴了 Claude Code 的部分
-
-已吸收：
+### 借鉴了 Claude Code 的部分
 
 - agent spec 思路。
 - allowed/denied tools 权限模型。
 - verifier 思路。
 - subagent 类型预留。
 - trace/metadata 便于后续 task resume 和分析。
-
-没有直接照搬：
-
-- Claude Code 的完整 task lifecycle。
-- tmux/in-process teammate。
-- settings/plugin/policy 层级。
-- MCP/hook/skill 复杂机制。
+- purpose-based 模型路由。
 
 ## 与 pi 的区别
 
 ### pi 是可运行 coding agent 框架
 
-pi 具备：
+pi 具备：Agent loop、CLI/session/tools/extensions/compaction、Slack bot、统一模型抽象和 provider registry、OpenAI/Anthropic/Google/local provider streaming、JSONL session tree、OAuth/AuthStorage。
 
-- `pi-agent-core`：Agent loop、state、event、tool execution。
-- `pi-coding-agent`：CLI/session/tools/extensions/compaction。
-- `pi-mom`：Slack bot 外壳。
-- `pi-ai`：统一模型抽象和 provider registry。
-- `ModelRegistry`：内置模型、models.json、自定义 provider、auth、headers、OAuth。
-- OpenAI/Anthropic/Google/local provider streaming。
-- JSONL session tree。
-
-### evolving-agent 当前更轻量
-
-我们当前没有复用 pi 包，也没有引入 pi 的完整模型系统。
+### evolving-agent 当前更轻量，但覆盖面更广
 
 我们的模型层是：
 
@@ -407,26 +409,13 @@ pi 具备：
 ModelRegistry
   ├── ProviderConfig
   ├── discovered/manual ModelConfig
+  ├── ModelRouter (purpose-based)
   └── ModelClient
       ├── OpenAIModelClient
       └── AnthropicModelClient
 ```
 
-pi 的模型层更像：
-
-```txt
-ModelRegistry
-  ├── built-in models
-  ├── models.json
-  ├── provider config
-  ├── auth storage
-  ├── OAuth
-  └── streamSimple provider abstraction
-```
-
-### 我们借鉴了 pi 的部分
-
-已吸收：
+### 借鉴了 pi 的部分
 
 - runtime / loop / session 分层。
 - model client 抽象。
@@ -437,62 +426,53 @@ ModelRegistry
 - JSONL store 思路。
 - event/trace 驱动。
 
-没有直接照搬：
+### 没有照搬的
 
-- pi 的完整 `ModelRegistry`。
-- pi 的 `streamSimple`。
-- pi 的完整 `Model` 元数据：cost、contextWindow、maxTokens、input types。
+- pi 的完整 `ModelRegistry` 元数据：cost、contextWindow、maxTokens。
+- pi 的 `streamSimple` streaming 抽象。
 - pi 的 OAuth/AuthStorage。
 - pi 的 extension system。
-- pi 的 session tree 和 compaction。
 
-## 当前我们比 pi/Claude Code 少的关键能力
+## 当前缺失的关键能力
 
 优先级较高：
 
-1. ~~基础 coding tools：read、write、bash、edit。~~ 已完成 workspace-scoped 实现。
-2. ~~tool call 协议：让 OpenAI/Anthropic client 可以解析模型返回的工具调用。~~ 已完成。
+1. **OS/container 级工具沙箱**：当前 benchmark-sandbox 只是 workspace/cwd 级约束。
 
 优先级中等：
 
-1. ~~JSONL trace replay。~~ 已完成事件级 replay summary / warnings。
-2. ~~benchmark report 导出。~~ 已完成。
-3. ~~run diff。~~ 已完成 task/suite diff。
-4. verification artifact。
-5. subagent 手动调用。
-6. candidate generator 示例。
+1. **Runtime events 结构化增强**：compaction/micro-compact/truncation 事件已定义 payload 并触发，可进一步增强 trace 完整性（如 memory extraction、subagent span 纳入 trace）。
+2. **session compaction entry 独立单测**：session.ts 新增大量 logic 但缺少独立单元测试。
 
 优先级较低：
 
-1. MCP。
-2. hooks。
-3. skills。
-4. worktree isolation。
-5. background task。
-6. TUI。
-7. Slack bot。
+1. hooks。
+2. skills。
+3. worktree isolation。
+4. background task。
+5. Slack bot。
 
 ## 建议下一阶段
 
-建议下一阶段先实现 Agent 可用性闭环，再继续扩展 benchmark/evolution 能力。
-
 已完成：
 
-- evolution comparison 可以导出稳定 JSON/Markdown report。
-- evolution comparison 可以保存历史记录并导出决策依据。
-- trace replay 可以基于已有 trace 生成事件级 summary / warnings。
-- run diff 可以比较 task/suite run 的状态、分数、耗时和事件差异。
-- deterministic candidate generator 可以产生可复现 candidate。
-- manual subagent tool 可以显式调用子 agent。
-- `chat` CLI 可以直接启动一次对话。
-- 交互式 chat 支持连续输入。
-- session memory 可以保存/恢复 `AgentSession.messages`，支持 `--session` / `--resume`。
-- session startup context 可以保存并恢复 agent/provider/model/baseURL/toolProfile，减少 resume 参数。
-- 默认 CLI 配置可以减少启动 agent 时必须传的参数数量。
-- benchmark 已覆盖 runtime error、timeout、abort、tool profile、task-level narrowing、CLI 失败退出码、trace/report 输出和 subagent trace 链路，避免 chat/session/tool 关键路径回归。
+- chat CLI 单次/交互式对话。
+- session memory 保存/恢复，含 startup context。
+- 默认 CLI 配置。
+- TUI 交互系统。
+- MCP 工具集成。
+- 记忆管理系统。
+- benchmark 覆盖关键路径回归测试。
+- context compaction / micro-compact / 上下文裁剪 / 工具输出截断。
+- 模型路由与模型缓存。
+- **index.ts 公共 API 导出补全**：MCP（adapter/client/diagnostics/names/registry/result）和 memory（manager/tools/extractor/llm-extractor/json-memory-store/diff/replay/verifier/resolution）模块。
+- **verification artifact**：VerificationIssue 携带结构化 details，新增 PolicyEventArtifact、TruncationArtifact、ErrorArtifact，VerificationReport 包含完整 artifact 摘要（policy denials、truncation、errors 统计）。
+- **deterministic candidate generator 扩展**：新增 5 种 mutation 类型 — denied-tools-add/remove、set-max-turns、set-timeout-ms、set-max-tool-calls，覆盖 runtime 参数变异能力。
 
 下一目标：
 
-- 扩展 verification artifact，结构化保存失败原因、policy event、tool result 截断信息。
+1. **考虑 runtime event 扩展**：compaction/micro-compact/truncation 事件已在 events.ts 中定义 payload 类型并已在 loop.ts 中触发，但可进一步增强 trace 完整性（如 memory extraction、subagent span 纳入 trace）。
+2. **考虑 session compaction entry 独立单测**：session.ts 新增大量 compaction/trim/micro-compact 逻辑。
+3. **考虑 OS/container 级工具沙箱**：当前 benchmark-sandbox 只是 workspace/cwd 级约束。
 
-这样可以把当前“可分析、可重放、可持续演化的 benchmark 闭环”调整为“可用 Agent → 可验证 Agent → 可演化 Agent”的主线。
+这样可以把当前”可用 Agent → 可验证 Agent → 可演化 Agent”的主线持续推进。
