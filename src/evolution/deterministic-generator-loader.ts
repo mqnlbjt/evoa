@@ -33,10 +33,13 @@ function validateMutation(value: unknown): DeterministicMutation {
 	};
 	const kind = value.kind;
 	if (kind === "system-prompt-append" || kind === "system-prompt-replace") return { id, kind, text: requireString(value.text, "mutation.text"), ...optional };
-	if (kind === "allowed-tools-add" || kind === "allowed-tools-remove") return { id, kind, tools: requireStringArray(value.tools, "mutation.tools"), ...optional };
+	if (kind === "allowed-tools-add" || kind === "allowed-tools-remove" || kind === "denied-tools-add" || kind === "denied-tools-remove") return { id, kind, tools: requireStringArray(value.tools, "mutation.tools"), ...optional };
 	if (kind === "model-options-merge") return { id, kind, options: requireRecord(value.options, "mutation.options"), ...optional };
 	if (kind === "set-reasoning-level") return { id, kind, reasoningLevel: requireReasoningLevel(value.reasoningLevel), ...optional };
-	throw new Error("mutation.kind must be system-prompt-append, system-prompt-replace, allowed-tools-add, allowed-tools-remove, model-options-merge, or set-reasoning-level");
+	if (kind === "set-max-turns") return { id, kind, maxTurns: requirePositiveInteger(value.maxTurns, "mutation.maxTurns"), ...optional };
+	if (kind === "set-timeout-ms") return { id, kind, timeoutMs: requirePositiveInteger(value.timeoutMs, "mutation.timeoutMs"), ...optional };
+	if (kind === "set-max-tool-calls") return { id, kind, maxToolCalls: requirePositiveInteger(value.maxToolCalls, "mutation.maxToolCalls"), ...optional };
+	throw new Error("mutation.kind must be a supported deterministic mutation kind");
 }
 
 function requireStringArray(value: unknown, field: string): string[] {

@@ -4,9 +4,12 @@ import type { CandidateGenerator, CandidateKind, EvolutionCandidate } from "./ty
 
 export type DeterministicMutation =
 	| { id: string; kind: "system-prompt-append" | "system-prompt-replace"; text: string; description?: string; metadata?: Record<string, unknown> }
-	| { id: string; kind: "allowed-tools-add" | "allowed-tools-remove"; tools: string[]; description?: string; metadata?: Record<string, unknown> }
+	| { id: string; kind: "allowed-tools-add" | "allowed-tools-remove" | "denied-tools-add" | "denied-tools-remove"; tools: string[]; description?: string; metadata?: Record<string, unknown> }
 	| { id: string; kind: "model-options-merge"; options: Record<string, unknown>; description?: string; metadata?: Record<string, unknown> }
-	| { id: string; kind: "set-reasoning-level"; reasoningLevel: NonNullable<AgentSpec["model"]["reasoningLevel"]>; description?: string; metadata?: Record<string, unknown> };
+	| { id: string; kind: "set-reasoning-level"; reasoningLevel: NonNullable<AgentSpec["model"]["reasoningLevel"]>; description?: string; metadata?: Record<string, unknown> }
+	| { id: string; kind: "set-max-turns"; maxTurns: number; description?: string; metadata?: Record<string, unknown> }
+	| { id: string; kind: "set-timeout-ms"; timeoutMs: number; description?: string; metadata?: Record<string, unknown> }
+	| { id: string; kind: "set-max-tool-calls"; maxToolCalls: number; description?: string; metadata?: Record<string, unknown> };
 
 export interface DeterministicCandidateGeneratorOptions {
 	mutations: DeterministicMutation[];
@@ -72,6 +75,23 @@ function applyMutation(agent: AgentSpec, mutation: DeterministicMutation): Appli
 		case "allowed-tools-remove":
 			setTools(agent, withoutTools(agent.tools.allowedTools, mutation.tools), agent.tools.deniedTools ?? []);
 			return { kind: "tool", patch: `tools.allowedTools -= [${mutation.tools.join(", ")}]` };
+		case "denied-tools-add": {
+			const denied = uniqueSorted([...(agent.tools.deniedTools ?? []), ...mutation.tools]);
+			agent.tools = { ...agent.tools, deniedTools: denied, allowedTools: withoutTools(agent.tools.allowedTools, mutation.tools) };
+			return { kind: "tool", patch: `tools.deniedTools += [${mutation.tools.join(", ")}]` };
+		}
+		case "denied-tools-remove":
+			agent.tools = { ...agent.tools, deniedTools: withoutTools(agent.tools.deniedTools ?? [], mutation.tools) };
+			return { kind: "tool", patch: `tools.deniedTools -= [${mutation.tools.join(", ")}]` };
+		case "set-max-turns":
+			agent.runtime = { ...agent.runtime, maxTurns: mutation.maxTurns };
+			return { kind: "runtime", patch: `runtime.maxTurns = ${mutation.maxTurns}` };
+		case "set-timeout-ms":
+			agent.runtime = { ...agent.runtime, timeoutMs: mutation.timeoutMs };
+			return { kind: "runtime", patch: `runtime.timeoutMs = ${mutation.timeoutMs}` };
+		case "set-max-tool-calls":
+			agent.tools = { ...agent.tools, maxToolCalls: mutation.maxToolCalls };
+			return { kind: "runtime", patch: `tools.maxToolCalls = ${mutation.maxToolCalls}` };
 		case "model-options-merge":
 			agent.model = { ...agent.model, options: { ...(agent.model.options ?? {}), ...mutation.options } };
 			return { kind: "runtime", patch: `model.options merge keys: ${Object.keys(mutation.options).sort().join(", ")}` };
@@ -99,9 +119,12 @@ function normalizeMutation(mutation: DeterministicMutation): DeterministicMutati
 	requireNonEmptyString(mutation.id, "mutation.id");
 	const base = { id: mutation.id, kind: mutation.kind, ...(mutation.description === undefined ? {} : { description: requireNonEmptyString(mutation.description, "mutation.description") }), ...(mutation.metadata === undefined ? {} : { metadata: cloneRecord(mutation.metadata, "mutation.metadata") }) };
 	if (mutation.kind === "system-prompt-append" || mutation.kind === "system-prompt-replace") return { ...base, kind: mutation.kind, text: requireNonEmptyString(mutation.text, "mutation.text") };
-	if (mutation.kind === "allowed-tools-add" || mutation.kind === "allowed-tools-remove") return { ...base, kind: mutation.kind, tools: normalizeStringArray(mutation.tools, "mutation.tools") };
+	if (mutation.kind === "allowed-tools-add" || mutation.kind === "allowed-tools-remove" || mutation.kind === "denied-tools-add" || mutation.kind === "denied-tools-remove") return { ...base, kind: mutation.kind, tools: normalizeStringArray(mutation.tools, "mutation.tools") };
 	if (mutation.kind === "model-options-merge") return { ...base, kind: mutation.kind, options: cloneRecord(mutation.options, "mutation.options") };
 	if (mutation.kind === "set-reasoning-level") return { ...base, kind: mutation.kind, reasoningLevel: requireReasoningLevel(mutation.reasoningLevel) };
+	if (mutation.kind === "set-max-turns") return { ...base, kind: mutation.kind, maxTurns: requirePositiveInteger(mutation.maxTurns, "mutation.maxTurns") };
+	if (mutation.kind === "set-timeout-ms") return { ...base, kind: mutation.kind, timeoutMs: requirePositiveInteger(mutation.timeoutMs, "mutation.timeoutMs") };
+	if (mutation.kind === "set-max-tool-calls") return { ...base, kind: mutation.kind, maxToolCalls: requirePositiveInteger(mutation.maxToolCalls, "mutation.maxToolCalls") };
 	throw new Error("mutation.kind must be a supported deterministic mutation kind");
 }
 
@@ -162,6 +185,11 @@ function normalizeStringArray(value: unknown, field: string): string[] {
 function cloneRecord(value: unknown, field: string): Record<string, unknown> {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${field} must be an object`);
 	return { ...value };
+}
+
+function requirePositiveInteger(value: unknown, field: string): number {
+	if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new Error(`${field} must be a positive integer`);
+	return value;
 }
 
 function requireNonEmptyString(value: unknown, field: string): string {

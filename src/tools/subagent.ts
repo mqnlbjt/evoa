@@ -3,8 +3,10 @@ import type { RuntimeHook, ToolCall, ToolRegistry } from "./registry.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
 import type { TraceEvent } from "../runtime/events.js";
 import { runAgentLoop } from "../runtime/loop.js";
-import { createAgentSession } from "../runtime/session.js";
+import { createAgentSession, type AgentSession } from "../runtime/session.js";
+import { summarizeBranch } from "../runtime/branch-summarization.js";
 import type { EvolvingAgentTool, ToolExecutionContext } from "./types.js";
+import type { SubagentTranscriptStore } from "../sessions/subagent-transcript-store.js";
 
 export interface SubagentToolInput {
 	subagentId: string;
@@ -20,6 +22,10 @@ export interface SubagentTraceSummary {
 	toolCallCount: number;
 	toolResultCount: number;
 	errorCount: number;
+	turnCount: number;
+	totalDurationMs: number;
+	inputTokens?: number;
+	outputTokens?: number;
 }
 
 export interface SubagentToolOutput {
@@ -32,6 +38,8 @@ export interface SubagentToolOutput {
 	trace: TraceEvent[];
 	traceSummary: SubagentTraceSummary;
 	errorMessage?: string;
+	parentSessionId?: string;
+	parentToolCallId?: string;
 }
 
 export interface SubagentToolOptions {
@@ -41,6 +49,7 @@ export interface SubagentToolOptions {
 	hooks?: RuntimeHook[];
 	createId?: () => string;
 	now?: () => number;
+	transcriptStore?: SubagentTranscriptStore;
 }
 
 export function createSubagentTool(options: SubagentToolOptions): EvolvingAgentTool<SubagentToolInput, SubagentToolOutput> {
@@ -80,14 +89,49 @@ export function createSubagentTool(options: SubagentToolOptions): EvolvingAgentT
 			});
 
 			try {
+				let subagentRegistry = options.createToolRegistryForAgent(subagent.agent);
+				if (subagent.agent.tools.allowedTools.length > 0) {
+					subagentRegistry = subagentRegistry.filterByAllowedTools(subagent.agent.tools.allowedTools);
+				}
+
 				const result = await runAgentLoop(session, {
 					modelClient: options.modelClient,
-					toolRegistry: options.createToolRegistryForAgent(subagent.agent),
+					toolRegistry: subagentRegistry,
 					...(options.hooks ? { hooks: options.hooks } : {}),
 					createId,
 					...(options.now ? { now: options.now } : {}),
 				}, signal);
 				const trace = result.trace ?? session.trace;
+				const summary = summarizeTraceInternal(trace, session);
+
+				for (const event of trace) {
+					context.session.trace.push(event);
+				}
+
+				const branchOutcome = summarizeBranch(context.session, {
+					subagentId: subagent.id,
+					task: parsed.task,
+					answer: result.answer ?? "",
+					status: "completed",
+					turnCount: session.turnCount,
+					durationMs: summary.totalDurationMs,
+				}, createId, options.now ?? Date.now);
+
+				if (options.transcriptStore) {
+					const now = options.now ?? Date.now;
+					await options.transcriptStore.saveTranscript({
+						sessionId,
+						parentSessionId: context.session.id,
+						parentToolCallId: context.call.id,
+						subagentId: subagent.id,
+						agentId: subagent.agent.id,
+						taskId: task.id,
+						trace,
+						summary,
+						createdAt: now(),
+					});
+				}
+
 				return {
 					subagentId: subagent.id,
 					agentId: subagent.agent.id,
@@ -96,9 +140,28 @@ export function createSubagentTool(options: SubagentToolOptions): EvolvingAgentT
 					status: "completed",
 					answer: result.answer ?? "",
 					trace,
-					traceSummary: summarizeTrace(trace),
+					traceSummary: summary,
+					parentSessionId: context.session.id,
+					parentToolCallId: context.call.id,
 				};
 			} catch (error) {
+				const trace = session.trace;
+				const summary = summarizeTraceInternal(trace, session);
+
+				for (const event of trace) {
+					context.session.trace.push(event);
+				}
+
+				summarizeBranch(context.session, {
+					subagentId: subagent.id,
+					task: parsed.task,
+					answer: "",
+					status: "errored",
+					errorMessage: error instanceof Error ? error.message : String(error),
+					turnCount: session.turnCount,
+					durationMs: summary.totalDurationMs,
+				}, createId, options.now ?? Date.now);
+
 				return {
 					subagentId: subagent.id,
 					agentId: subagent.agent.id,
@@ -106,9 +169,11 @@ export function createSubagentTool(options: SubagentToolOptions): EvolvingAgentT
 					sessionId,
 					status: "errored",
 					answer: "",
-					trace: session.trace,
-					traceSummary: summarizeTrace(session.trace),
+					trace,
+					traceSummary: summary,
 					errorMessage: error instanceof Error ? error.message : String(error),
+					parentSessionId: context.session.id,
+					parentToolCallId: context.call.id,
 				};
 			}
 		},
@@ -150,6 +215,26 @@ function parseInput(input: unknown): SubagentToolInput {
 	};
 }
 
+function summarizeTraceInternal(trace: TraceEvent[], session: AgentSession): SubagentTraceSummary {
+	const runEnd = trace.find((event) => event.type === "run_end");
+	const durationMs: number | undefined = runEnd?.payload && typeof runEnd.payload === "object" && "durationMs" in runEnd.payload
+		? (runEnd.payload as { durationMs: number }).durationMs
+		: undefined;
+
+	return {
+		eventCount: trace.length,
+		modelRequestCount: trace.filter((event) => event.type === "model_request").length,
+		modelResponseCount: trace.filter((event) => event.type === "model_response").length,
+		toolCallCount: trace.filter((event) => event.type === "tool_call").length,
+		toolResultCount: trace.filter((event) => event.type === "tool_result").length,
+		errorCount: trace.filter((event) => event.type === "error").length,
+		turnCount: session.turnCount,
+		totalDurationMs: durationMs ?? 0,
+		...(session.cumulativeRealInputTokens === undefined ? {} : { inputTokens: session.cumulativeRealInputTokens }),
+		...(session.cumulativeRealOutputTokens === undefined ? {} : { outputTokens: session.cumulativeRealOutputTokens }),
+	};
+}
+
 export function summarizeTrace(trace: TraceEvent[]): SubagentTraceSummary {
 	return {
 		eventCount: trace.length,
@@ -158,7 +243,16 @@ export function summarizeTrace(trace: TraceEvent[]): SubagentTraceSummary {
 		toolCallCount: trace.filter((event) => event.type === "tool_call").length,
 		toolResultCount: trace.filter((event) => event.type === "tool_result").length,
 		errorCount: trace.filter((event) => event.type === "error").length,
+		turnCount: 0,
+		totalDurationMs: 0,
 	};
+}
+
+function runEndDurationMs(trace: TraceEvent[]): number | undefined {
+	const runEnd = trace.find((event) => event.type === "run_end");
+	return runEnd?.payload && typeof runEnd.payload === "object" && "durationMs" in runEnd.payload
+		? (runEnd.payload as { durationMs: number }).durationMs
+		: undefined;
 }
 
 export function isSubagentToolOutput(value: unknown): value is SubagentToolOutput {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ProviderConfig, ProviderFormat } from "../models/provider-types.js";
 import type { ModelRoutingSpec } from "../specs.js";
+import { parseTokenBudgetSyntax } from "../runtime/token-budget.js";
 import type { BenchmarkReportFormat } from "../benchmark/report.js";
 import type { EvolutionReportFormat } from "../evolution/report.js";
 import type { McpServersConfig } from "../mcp/types.js";
@@ -78,6 +79,7 @@ export interface ChatCommand extends BaseCommand, McpCommandFields, ModelRouting
 	sessionId?: string;
 	resumeSessionId?: string;
 	sessionDir?: string;
+	tokenBudget?: number;
 	providedFlags: CliProvidedFlags;
 }
 
@@ -389,6 +391,7 @@ function buildChat(flags: FlagValues, prompt: string | undefined, common: BaseCo
 	const apiKey = optionValue(flags, "--api-key", defaults.apiKey);
 	const toolProfile = toolProfileFlag(flags, defaults, diagnostics);
 	const sessionDir = optionValue(flags, "--session-dir", defaults.sessionDir);
+	const tokenBudget = parseBudgetFlag(flags);
 	if (sessionId && resumeSessionId) diagnostics.push("--session and --resume cannot be used together");
 	return {
 		kind: "chat",
@@ -404,6 +407,7 @@ function buildChat(flags: FlagValues, prompt: string | undefined, common: BaseCo
 		...(sessionId ? { sessionId } : {}),
 		...(resumeSessionId ? { resumeSessionId } : {}),
 		...(sessionDir ? { sessionDir } : {}),
+		...(tokenBudget === undefined ? {} : { tokenBudget }),
 		providedFlags: chatProvidedFlags(flags),
 		...(defaults.mcpServers ? { mcpServers: defaults.mcpServers } : {}),
 		...(defaults.providers ? { providers: defaults.providers } : {}),
@@ -634,3 +638,12 @@ function stringFlag(flags: FlagValues, flag: string): string | undefined {
 	const value = flags[flag];
 	return typeof value === "string" ? value : undefined;
 }
+
+	function parseBudgetFlag(flags: FlagValues): number | undefined {
+		const raw = stringFlag(flags, "--token-budget");
+		if (!raw) return undefined;
+		const budget = parseTokenBudgetSyntax(raw);
+		if (budget === undefined) return undefined;
+		if (budget > 10_000_000) return 10_000_000;
+		return budget;
+	}

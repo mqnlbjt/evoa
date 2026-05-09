@@ -1,8 +1,16 @@
+export class McpToolCallError extends Error {
+	constructor(readonly result: unknown) {
+		super("MCP tool returned an error result");
+		this.name = "McpToolCallError";
+	}
+}
+
 export function normalizeMcpToolResult(result: unknown): unknown {
 	if (!isRecord(result)) return result;
-	if ("toolResult" in result) return result.toolResult;
+	if ("toolResult" in result) return normalizeMcpToolResult(result.toolResult);
 	const normalized = normalizeContentResult(result);
-	return result.isError === true ? { status: "error", result: normalized } : normalized;
+	if (result.isError === true) throw new McpToolCallError(normalized);
+	return normalized;
 }
 
 export function normalizeMcpResourceResult(result: unknown): unknown {

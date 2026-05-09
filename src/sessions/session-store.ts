@@ -1,5 +1,6 @@
 import type { ModelMessage } from "../models/types.js";
 import type { ProviderConfig, ProviderFormat } from "../models/provider-types.js";
+import type { SessionEntry } from "../runtime/session.js";
 import type { ModelRoutingSpec } from "../specs.js";
 import type { ToolProfile } from "../tools/profiles.js";
 
@@ -15,11 +16,15 @@ export interface StoredAgentStartupContext {
 	sessionDir?: string;
 }
 
+export type StoredSessionEntry = SessionEntry;
+
 export interface StoredAgentSession {
 	id: string;
 	agentId: string;
 	agentVersion?: string;
-	messages: ModelMessage[];
+	schemaVersion?: 2;
+	messages?: ModelMessage[];
+	entries?: StoredSessionEntry[];
 	startupContext?: StoredAgentStartupContext;
 	createdAt: number;
 	updatedAt: number;

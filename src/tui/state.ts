@@ -123,6 +123,7 @@ export class TuiState {
 		else if (event.type === "tool_call") this.applyToolCall(event);
 		else if (event.type === "tool_result") this.applyToolResult(event);
 		else if (event.type === "score") this.addLog({ kind: "score", text: summarizePayload(event.payload), severity: "info" });
+		else if (event.type === "response_truncated") this.addLog({ kind: "error", text: `⚠ 模型输出被截断 (${summarizePayload(event.payload)})`, severity: "warning" });
 		else if (event.type === "run_end") this.applyRunEnd(event);
 		else if (event.type === "error") this.addError(errorMessage(event.payload));
 	}

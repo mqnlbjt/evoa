@@ -54,10 +54,10 @@ function readFileTool(options: ResolvedOptions): EvolvingAgentTool {
 		permission: { defaultDecision: "allow", riskLevel: "low" },
 		concurrency: "parallel-safe",
 		timeoutMs: 5_000,
-		async execute(input, signal) {
+		async execute(input, signal, context) {
 			throwIfAborted(signal);
 			const parsed = objectInput(input);
-			const target = await resolveExistingInsideRoot(options.workspaceRoot, stringField(parsed, "path"));
+			const target = await resolveExistingInsideRoot(options.workspaceRoot, stringField(parsed, "path"), context?.sandboxMode);
 			throwIfAborted(signal);
 			const info = await stat(target);
 			if (!info.isFile()) throw new Error("Path is not a file");
@@ -84,10 +84,10 @@ function listDirTool(options: ResolvedOptions): EvolvingAgentTool {
 		permission: { defaultDecision: "allow", riskLevel: "low" },
 		concurrency: "parallel-safe",
 		timeoutMs: 5_000,
-		async execute(input, signal) {
+		async execute(input, signal, context) {
 			throwIfAborted(signal);
 			const parsed = objectInput(input);
-			const target = await resolveExistingInsideRoot(options.workspaceRoot, stringField(parsed, "path"));
+			const target = await resolveExistingInsideRoot(options.workspaceRoot, stringField(parsed, "path"), context?.sandboxMode);
 			throwIfAborted(signal);
 			const info = await stat(target);
 			if (!info.isDirectory()) throw new Error("Path is not a directory");
@@ -119,11 +119,11 @@ function findFilesTool(options: ResolvedOptions): EvolvingAgentTool {
 		permission: { defaultDecision: "allow", riskLevel: "low" },
 		concurrency: "parallel-safe",
 		timeoutMs: 10_000,
-		async execute(input, signal) {
+		async execute(input, signal, context) {
 			throwIfAborted(signal);
 			const parsed = objectInput(input);
 			const pattern = stringField(parsed, "pattern");
-			const start = await resolveExistingInsideRoot(options.workspaceRoot, optionalStringField(parsed, "path") ?? ".");
+			const start = await resolveExistingInsideRoot(options.workspaceRoot, optionalStringField(parsed, "path") ?? ".", context?.sandboxMode);
 			throwIfAborted(signal);
 			const info = await stat(start);
 			if (!info.isDirectory()) throw new Error("Path is not a directory");
@@ -157,13 +157,13 @@ function grepTool(options: ResolvedOptions): EvolvingAgentTool {
 		permission: { defaultDecision: "allow", riskLevel: "low" },
 		concurrency: "parallel-safe",
 		timeoutMs: 10_000,
-		async execute(input, signal) {
+		async execute(input, signal, context) {
 			throwIfAborted(signal);
 			const parsed = objectInput(input);
 			const pattern = stringField(parsed, "pattern");
 			const flags = parsed.caseInsensitive === true ? "i" : "";
 			const regex = new RegExp(pattern, flags);
-			const start = await resolveExistingInsideRoot(options.workspaceRoot, optionalStringField(parsed, "path") ?? ".");
+			const start = await resolveExistingInsideRoot(options.workspaceRoot, optionalStringField(parsed, "path") ?? ".", context?.sandboxMode);
 			const matches: Array<{ path: string; line: number; text: string }> = [];
 			await walkFiles(options, start, async (file) => {
 				throwIfAborted(signal);

@@ -28,16 +28,22 @@ export function validateAgentSpec(value: unknown): AgentSpec {
 		throw new Error("tools.maxToolCalls must be a non-negative integer");
 	}
 	if (!isRecord(agent.runtime)) throw new Error("runtime is required");
-	if (!Number.isInteger(agent.runtime.maxTurns) || agent.runtime.maxTurns < 1) {
-		throw new Error("runtime.maxTurns must be a positive integer");
+	const maxTurns = agent.runtime.maxTurns;
+	if (maxTurns !== undefined && maxTurns !== null && (typeof maxTurns !== "number" || !Number.isInteger(maxTurns) || maxTurns < 1)) {
+		throw new Error("runtime.maxTurns must be a positive integer when set");
 	}
-	if (agent.runtime.timeoutMs !== undefined && (!Number.isInteger(agent.runtime.timeoutMs) || agent.runtime.timeoutMs < 1)) {
+	const timeoutMs = agent.runtime.timeoutMs;
+	if (timeoutMs !== undefined && timeoutMs !== null && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1)) {
 		throw new Error("runtime.timeoutMs must be a positive integer");
 	}
-	if (agent.runtime.contextCompression !== undefined && !["off", "auto"].includes(agent.runtime.contextCompression)) {
+	const contextCompression = agent.runtime.contextCompression;
+	if (contextCompression !== undefined && contextCompression !== null && !["off", "auto"].includes(String(contextCompression))) {
 		throw new Error("runtime.contextCompression must be off or auto");
 	}
-	if (agent.runtime.memoryPolicy !== undefined && !["none", "session", "long-term"].includes(agent.runtime.memoryPolicy)) {
+	if (agent.runtime.contextBudget !== undefined) validateContextBudget(agent.runtime.contextBudget);
+	if (agent.runtime.toolOutputBudget !== undefined) validateToolOutputBudget(agent.runtime.toolOutputBudget, "runtime.toolOutputBudget");
+	const memoryPolicy = agent.runtime.memoryPolicy;
+	if (memoryPolicy !== undefined && memoryPolicy !== null && !["none", "session", "long-term"].includes(String(memoryPolicy))) {
 		throw new Error("runtime.memoryPolicy must be none, session, or long-term");
 	}
 
@@ -99,6 +105,69 @@ function validatePurposeRules(value: unknown): void {
 
 function isModelPurpose(value: string): value is ModelPurpose {
 	return ["main", "memory-extraction", "summary", "compaction", "verification", "evolution", "coding", "tool-heavy"].includes(value);
+}
+
+function validateContextBudget(value: unknown): void {
+	if (!isRecord(value)) throw new Error("runtime.contextBudget must be an object");
+	validatePositiveInteger(value.maxInputTokens, "runtime.contextBudget.maxInputTokens");
+	validatePositiveInteger(value.reserveTokens, "runtime.contextBudget.reserveTokens");
+	validatePositiveInteger(value.keepRecentTokens, "runtime.contextBudget.keepRecentTokens");
+	validatePositiveInteger(value.summaryMaxTokens, "runtime.contextBudget.summaryMaxTokens");
+	validatePositiveInteger(value.maxCompactionsPerRun, "runtime.contextBudget.maxCompactionsPerRun");
+	validatePositiveInteger(value.maxConsecutiveCompactionFailures, "runtime.contextBudget.maxConsecutiveCompactionFailures");
+	if (value.triggerRatio !== undefined && (typeof value.triggerRatio !== "number" || value.triggerRatio <= 0 || value.triggerRatio > 1)) {
+		throw new Error("runtime.contextBudget.triggerRatio must be > 0 and <= 1");
+	}
+	if (value.failureMode !== undefined && !["continue", "error"].includes(String(value.failureMode))) {
+		throw new Error("runtime.contextBudget.failureMode must be continue or error");
+	}
+	if (value.microCompact !== undefined) validateMicroCompact(value.microCompact);
+}
+
+function validateMicroCompact(value: unknown): void {
+	if (!isRecord(value)) throw new Error("runtime.contextBudget.microCompact must be an object");
+	if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+		throw new Error("runtime.contextBudget.microCompact.enabled must be a boolean");
+	}
+	if (value.compactableToolNames !== undefined) {
+		if (!Array.isArray(value.compactableToolNames)) throw new Error("runtime.contextBudget.microCompact.compactableToolNames must be an array");
+		for (const name of value.compactableToolNames) {
+			if (typeof name !== "string" || name.length === 0) throw new Error("runtime.contextBudget.microCompact.compactableToolNames must contain non-empty strings");
+		}
+	}
+	if (value.keepRecentTools !== undefined) {
+		const krt = value.keepRecentTools;
+		if (krt !== null && (typeof krt !== "number" || !Number.isInteger(krt) || krt < 0)) {
+			throw new Error("runtime.contextBudget.microCompact.keepRecentTools must be a non-negative integer");
+		}
+	}
+}
+
+function validateToolOutputBudget(value: unknown, path: string): void {
+	if (!isRecord(value)) throw new Error(`${path} must be an object`);
+	validatePositiveInteger(value.maxBytes, `${path}.maxBytes`);
+	validatePositiveInteger(value.headBytes, `${path}.headBytes`);
+	validatePositiveInteger(value.tailBytes, `${path}.tailBytes`);
+	if (value.strategy !== undefined && !["head-tail", "head-only"].includes(String(value.strategy))) {
+		throw new Error(`${path}.strategy must be head-tail or head-only`);
+	}
+	if (value.includeMetadata !== undefined && typeof value.includeMetadata !== "boolean") {
+		throw new Error(`${path}.includeMetadata must be a boolean`);
+	}
+	if (typeof value.headBytes === "number" && typeof value.tailBytes === "number" && typeof value.maxBytes === "number" && value.headBytes + value.tailBytes > value.maxBytes) {
+		throw new Error(`${path}.headBytes + tailBytes must be <= maxBytes`);
+	}
+	if (value.perTool !== undefined) {
+		if (!isRecord(value.perTool)) throw new Error(`${path}.perTool must be an object`);
+		for (const [toolName, budget] of Object.entries(value.perTool)) {
+			requireString(toolName, `${path}.perTool key`);
+			validateToolOutputBudget(budget, `${path}.perTool.${toolName}`);
+		}
+	}
+}
+
+function validatePositiveInteger(value: unknown, field: string): void {
+	if (value !== undefined && (!Number.isInteger(value) || Number(value) < 1)) throw new Error(`${field} must be a positive integer`);
 }
 
 function requireString(value: unknown, field: string): asserts value is string {

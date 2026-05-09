@@ -1,6 +1,6 @@
 import type { AgentSpec, TaskSpec } from "../specs.js";
 import type { RunStore } from "../sessions/run-store.js";
-import type { RunEndPayload, RunStartPayload, ScorePayload, TraceEvent } from "../runtime/events.js";
+import type { TraceEvent } from "../runtime/events.js";
 import { isRuntimeTimeoutError } from "../runtime/timeout.js";
 import type {
 	AgentRuntimeExecutor,
@@ -64,7 +64,7 @@ export class BenchmarkRunner {
 	private async runTaskWithoutClosing(agent: AgentSpec, task: TaskSpec, signal: AbortSignal | undefined, closeRuntime: boolean): Promise<AgentTaskRunResult> {
 		const runId = this.createId();
 		const startedAt = this.now();
-		const trace: TraceEvent[] = [this.event<RunStartPayload>("run_start", agent, task, { agent, task })];
+		const trace: TraceEvent[] = [this.event("run_start", agent, task, { agent, task })];
 
 		let output: TaskExecutionOutput = {};
 		let score: ScoreResult;
@@ -89,8 +89,8 @@ export class BenchmarkRunner {
 		}
 
 		const endedAt = this.now();
-		trace.push(this.event<ScorePayload>("score", agent, task, score));
-		trace.push(this.event<RunEndPayload>("run_end", agent, task, { status, durationMs: endedAt - startedAt }));
+		trace.push(this.event("score", agent, task, score));
+		trace.push(this.event("run_end", agent, task, { status, durationMs: endedAt - startedAt }));
 
 		const result: AgentTaskRunResult = {
 			runId,
@@ -113,7 +113,7 @@ export class BenchmarkRunner {
 		}
 	}
 
-	private event<TPayload>(type: TraceEvent["type"], agent: AgentSpec, task: TaskSpec, payload: TPayload): TraceEvent<TPayload> {
+	private event(type: TraceEvent["type"], agent: AgentSpec, task: TaskSpec, payload: unknown): TraceEvent {
 		return {
 			id: this.createId(),
 			type,
@@ -121,7 +121,7 @@ export class BenchmarkRunner {
 			agentId: agent.id,
 			taskId: task.id,
 			payload,
-		};
+		} as TraceEvent;
 	}
 }
 

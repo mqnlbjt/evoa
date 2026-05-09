@@ -39,7 +39,7 @@ export class AnthropicModelClient implements ModelClient {
 			throw new Error("Anthropic API key is required. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or pass apiKey.");
 		}
 
-		const requestBody = buildBody(request, this.options.maxTokens ?? numberOption(request.agent.model.options?.maxTokens) ?? 1024, this.options.baseURL);
+		const requestBody = buildBody(request, this.options.maxTokens ?? numberOption(request.agent.model.options?.maxTokens) ?? 8192, this.options.baseURL);
 		const init: RequestInit = {
 			method: "POST",
 			headers: {

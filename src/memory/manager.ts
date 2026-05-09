@@ -1,4 +1,5 @@
 import type { ModelMessage } from "../models/types.js";
+import { estimateTextTokens } from "../runtime/budget.js";
 import { ruleBasedMemoryExtractor } from "./extractor.js";
 import { effectiveScope, resolveReadableMemories } from "./resolution.js";
 import type { ManualMemoryInput, MemoryCandidate, MemoryContext, MemoryContextItems, MemoryContextRequest, MemoryExtractor, MemoryForgetInput, MemoryForgetResult, MemoryItem, MemoryReadRequest, MemoryReadResult, MemorySearchRequest, MemoryStore, MemoryTurnInput, MemoryUpdateInput, StoredMemoryLayer } from "./types.js";
@@ -9,8 +10,13 @@ export class MemoryManager {
 
 	async loadContextItems(request: MemoryContextRequest): Promise<MemoryContextItems> {
 		const readable = await this.readableItems(request);
-		const stable = stableMemoryItems(readable).slice(0, request.maxStableItems ?? 20);
-		const dynamic = dynamicMemoryItems(readable, request.prompt, stable).slice(0, request.maxDynamicItems ?? 10);
+		const terms = searchTerms(request.prompt);
+		const corpus = buildMemoryCorpus(readable);
+		const budgets = contextBudgets(request);
+		const stable = selectMemoryItems(stableMemoryItems(readable, terms, corpus), budgets.maxStableItems, budgets.maxStableTokens);
+		const stableTokens = memoryItemsTokens(stable);
+		const dynamicTokenBudget = Math.max(0, Math.min(budgets.maxDynamicTokens, budgets.maxContextTokens - stableTokens));
+		const dynamic = selectMemoryItems(dynamicMemoryItems(readable, terms, stable, corpus), budgets.maxDynamicItems, dynamicTokenBudget);
 		return { stable, dynamic };
 	}
 
@@ -29,11 +35,13 @@ export class MemoryManager {
 	async search(request: MemorySearchRequest): Promise<MemoryItem[]> {
 		const terms = searchTerms(request.query);
 		const limit = boundedLimit(request.limit, 10, 50);
-		return (await this.readableItems(request))
+		const items = (await this.readableItems(request))
 			.filter((item) => request.scope === undefined || effectiveScope(item) === request.scope)
-			.filter((item) => request.layer === undefined || item.layer === request.layer)
-			.filter((item) => terms.length === 0 || terms.some((term) => item.content.toLowerCase().includes(term)))
-			.sort((left, right) => searchRank(right, terms) - searchRank(left, terms) || right.updatedAt - left.updatedAt || memoryOrder(left, right))
+			.filter((item) => request.layer === undefined || item.layer === request.layer);
+		const corpus = buildMemoryCorpus(items);
+		return items
+			.filter((item) => terms.length === 0 || searchRank(item, terms, corpus) > 0)
+			.sort((left, right) => searchRank(right, terms, corpus) - searchRank(left, terms, corpus) || right.updatedAt - left.updatedAt || memoryOrder(left, right))
 			.slice(0, limit);
 	}
 
@@ -102,31 +110,84 @@ export class MemoryManager {
 	}
 }
 
-function stableMemoryItems(items: MemoryItem[]): MemoryItem[] {
+function stableMemoryItems(items: MemoryItem[], terms: string[], corpus: MemoryCorpus): MemoryItem[] {
 	return items
-		.filter((item) => item.layer === "doctrine" || (item.layer === "knowledge" && item.metadata?.stable === true))
-		.sort(memoryOrder)
-		.slice(0, 20);
+		.filter(isStableMemoryItem)
+		.filter((item) => item.layer === "doctrine" || terms.length === 0 || searchRank(item, terms, corpus) > 0)
+		.sort((left, right) => stableRank(right, terms, corpus) - stableRank(left, terms, corpus) || memoryOrder(left, right));
 }
 
-function dynamicMemoryItems(items: MemoryItem[], prompt: string, stableItems: MemoryItem[]): MemoryItem[] {
+function dynamicMemoryItems(items: MemoryItem[], terms: string[], stableItems: MemoryItem[], corpus: MemoryCorpus): MemoryItem[] {
 	const stableIds = new Set(stableItems.map((item) => item.id));
-	const terms = searchTerms(prompt);
 	return items
-		.filter((item) => !stableIds.has(item.id))
-		.filter((item) => terms.length === 0 || terms.some((term) => item.content.toLowerCase().includes(term)))
-		.sort((left, right) => right.updatedAt - left.updatedAt || memoryOrder(left, right))
-		.slice(0, 10);
+		.filter((item) => !stableIds.has(item.id) && !isStableMemoryItem(item))
+		.filter((item) => terms.length === 0 || searchRank(item, terms, corpus) > 0)
+		.sort((left, right) => searchRank(right, terms, corpus) - searchRank(left, terms, corpus) || right.updatedAt - left.updatedAt || memoryOrder(left, right));
 }
+
+function isStableMemoryItem(item: MemoryItem): boolean {
+	return item.layer === "doctrine" || (item.layer === "knowledge" && item.metadata?.stable === true);
+}
+
+interface MemoryContextBudgets {
+	maxStableItems: number;
+	maxDynamicItems: number;
+	maxStableTokens: number;
+	maxDynamicTokens: number;
+	maxContextTokens: number;
+}
+
+function contextBudgets(request: MemoryContextRequest): MemoryContextBudgets {
+	const maxContextTokens = boundedLimit(request.maxContextTokens, 2_000, 16_000);
+	const maxStableTokens = Math.min(boundedLimit(request.maxStableTokens, 1_200, 16_000), maxContextTokens);
+	return {
+		maxStableItems: boundedLimit(request.maxStableItems, 20, 100),
+		maxDynamicItems: boundedLimit(request.maxDynamicItems, 10, 100),
+		maxStableTokens,
+		maxDynamicTokens: Math.min(boundedLimit(request.maxDynamicTokens, 800, 16_000), maxContextTokens),
+		maxContextTokens,
+	};
+}
+
+function selectMemoryItems(items: MemoryItem[], maxItems: number, maxTokens: number): MemoryItem[] {
+	const selected: MemoryItem[] = [];
+	let usedTokens = contextHeaderTokens;
+	for (const item of items) {
+		if (selected.length >= maxItems) break;
+		const itemTokens = memoryItemTokens(item);
+		if (usedTokens + itemTokens > maxTokens) continue;
+		selected.push(item);
+		usedTokens += itemTokens;
+	}
+	return selected;
+}
+
+function memoryItemsTokens(items: MemoryItem[]): number {
+	return items.reduce((total, item) => total + memoryItemTokens(item), items.length > 0 ? contextHeaderTokens : 0);
+}
+
+function memoryItemTokens(item: MemoryItem): number {
+	return estimateTextTokens(memoryLine(item));
+}
+
+function stableRank(item: MemoryItem, terms: string[], corpus: MemoryCorpus): number {
+	return searchRank(item, terms, corpus) + (item.layer === "doctrine" ? 1_000 : 0) + (item.metadata?.priority ?? 0);
+}
+
+const contextHeaderTokens = 32;
 
 function contextMessage(kind: "stable" | "dynamic", items: MemoryItem[]): ModelMessage | undefined {
 	if (items.length === 0) return undefined;
-	const content = [`Long-term memory ${kind} bootstrap context. Prefer memory tools for fresh lookup or edits; treat these verified, in-scope, non-stale memories as user-provided facts for this conversation:`, ...items.map((item) => `- [${effectiveScope(item)}/${item.layer}:${item.id}] ${item.content}`)].join("\n");
+	const content = [`Long-term memory ${kind} bootstrap context. Prefer memory tools for fresh lookup or edits; treat these verified, in-scope, non-stale memories as user-provided facts for this conversation:`, ...items.map(memoryLine)].join("\n");
 	return {
 		role: "user",
 		content,
 		contentBlocks: [{ type: "text", text: content }],
 	};
+}
+
+function memoryLine(item: MemoryItem): string {
+	return `- [${effectiveScope(item)}/${item.layer}:${item.id}] ${item.content}`;
 }
 
 function memoryOrder(left: MemoryItem, right: MemoryItem): number {
@@ -144,7 +205,19 @@ function layerRank(layer: StoredMemoryLayer): number {
 }
 
 function searchTerms(prompt: string): string[] {
-	return prompt.toLowerCase().split(/[^\p{L}\p{N}_-]+/u).filter((term) => term.length >= 2).slice(0, 8);
+	return memoryTerms(prompt).slice(0, 8);
+}
+
+function memoryTerms(text: string): string[] {
+	const terms: string[] = [];
+	for (const term of text.toLowerCase().split(/[^\p{L}\p{N}_-]+/u)) {
+		if (term.length < 2) continue;
+		terms.push(term);
+		if (/\p{Script=Han}/u.test(term)) {
+			for (let index = 0; index < term.length - 1; index += 1) terms.push(term.slice(index, index + 2));
+		}
+	}
+	return [...new Set(terms)];
 }
 
 function boundedLimit(value: number | undefined, fallback: number, max: number): number {
@@ -153,9 +226,57 @@ function boundedLimit(value: number | undefined, fallback: number, max: number):
 	return Math.min(Math.floor(value), max);
 }
 
-function searchRank(item: MemoryItem, terms: string[]): number {
-	const content = item.content.toLowerCase();
-	return terms.reduce((score, term) => score + (content.includes(term) ? 1 : 0), 0);
+interface MemoryCorpus {
+	documents: Map<string, MemoryDocumentStats>;
+	documentFrequency: Map<string, number>;
+	documentCount: number;
+	averageLength: number;
+}
+
+interface MemoryDocumentStats {
+	termFrequency: Map<string, number>;
+	length: number;
+}
+
+function buildMemoryCorpus(items: MemoryItem[]): MemoryCorpus {
+	const documents = new Map<string, MemoryDocumentStats>();
+	const documentFrequency = new Map<string, number>();
+	let totalLength = 0;
+	for (const item of items) {
+		const terms = memoryTerms(item.content);
+		const termFrequency = termCounts(terms);
+		documents.set(item.id, { termFrequency, length: terms.length });
+		totalLength += terms.length;
+		for (const term of termFrequency.keys()) documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+	}
+	return {
+		documents,
+		documentFrequency,
+		documentCount: items.length,
+		averageLength: items.length === 0 ? 1 : Math.max(1, totalLength / items.length),
+	};
+}
+
+function termCounts(terms: string[]): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const term of terms) counts.set(term, (counts.get(term) ?? 0) + 1);
+	return counts;
+}
+
+function searchRank(item: MemoryItem, terms: string[], corpus: MemoryCorpus): number {
+	if (terms.length === 0) return 0;
+	const document = corpus.documents.get(item.id);
+	if (!document || document.length === 0 || corpus.documentCount === 0) return 0;
+	const k1 = 1.2;
+	const b = 0.75;
+	return terms.reduce((score, term) => {
+		const frequency = document.termFrequency.get(term) ?? 0;
+		if (frequency === 0) return score;
+		const documentsWithTerm = corpus.documentFrequency.get(term) ?? 0;
+		const idf = Math.log(1 + (corpus.documentCount - documentsWithTerm + 0.5) / (documentsWithTerm + 0.5));
+		const normalizedLength = k1 * (1 - b + b * (document.length / corpus.averageLength));
+		return score + idf * ((frequency * (k1 + 1)) / (frequency + normalizedLength));
+	}, 0);
 }
 
 function manualMetadata(input: ManualMemoryInput): NonNullable<MemoryItem["metadata"]> {

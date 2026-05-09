@@ -89,6 +89,9 @@ export interface MemoryContextRequest {
 	now: () => number;
 	maxStableItems?: number;
 	maxDynamicItems?: number;
+	maxStableTokens?: number;
+	maxDynamicTokens?: number;
+	maxContextTokens?: number;
 }
 
 export interface MemorySearchRequest extends MemoryContextRequest {

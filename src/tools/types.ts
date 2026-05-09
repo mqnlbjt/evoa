@@ -14,6 +14,7 @@ export interface ToolPermissionPolicy {
 export interface ToolExecutionContext {
 	session: AgentSession;
 	call: ToolCall;
+	sandboxMode?: "off" | "workspace" | "docker";
 }
 
 export interface EvolvingAgentTool<TInput = unknown, TOutput = unknown> {

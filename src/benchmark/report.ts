@@ -40,6 +40,16 @@ export interface BenchmarkTaskReport {
 	errorMessage?: string;
 	trace?: TraceEvent[];
 	subagentTraces?: BenchmarkSubagentTraceReport[];
+	compactionStats?: BenchmarkCompactionStats;
+}
+
+export interface BenchmarkCompactionStats {
+	compactionCount: number;
+	microCompactCount: number;
+	trimCount: number;
+	truncationCount: number;
+	compactionFailures: number;
+	circuitBreakerTripped: boolean;
 }
 
 export interface BenchmarkSubagentTraceReport {
@@ -72,6 +82,7 @@ export function createBenchmarkReport(result: SuiteRunResult, options: Benchmark
 		summary: result.summary,
 		tasks: result.runs.map((run) => {
 			const subagentTraces = extractSubagentTraceReports(run.trace, options);
+			const compactionStats = extractCompactionStats(run.trace);
 			return {
 			runId: run.runId,
 			taskId: run.task.id,
@@ -85,6 +96,7 @@ export function createBenchmarkReport(result: SuiteRunResult, options: Benchmark
 			...(run.errorMessage ? { errorMessage: run.errorMessage } : {}),
 			...(options.includeTrace ? { trace: run.trace } : {}),
 			...(subagentTraces.length > 0 ? { subagentTraces } : {}),
+				...(compactionStats ? { compactionStats } : {}),
 		};
 		}),
 	};
@@ -175,6 +187,47 @@ function isTraceEvents(value: unknown): value is TraceEvent[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function extractCompactionStats(trace: TraceEvent[]): BenchmarkCompactionStats | undefined {
+	let compactionCount = 0;
+	let microCompactCount = 0;
+	let trimCount = 0;
+	let truncationCount = 0;
+	let compactionFailures = 0;
+	let circuitBreakerTripped = false;
+
+	for (const event of trace) {
+		if (event.type === "context_compaction") {
+			compactionCount += 1;
+			if (event.payload.reason === "failed") compactionFailures += 1;
+			if (event.payload.reason === "circuit_breaker") circuitBreakerTripped = true;
+			continue;
+		}
+		if (event.type === "micro_compact" && event.payload.compacted) {
+			microCompactCount += 1;
+			continue;
+		}
+		if (event.type === "context_trim" && event.payload.reason !== "within_budget") {
+			trimCount += 1;
+			continue;
+		}
+		if (event.type === "tool_result" && event.payload.metadata?.toolOutput?.truncated) {
+			truncationCount += 1;
+			continue;
+		}
+	}
+
+	if (compactionCount === 0 && microCompactCount === 0 && trimCount === 0 && truncationCount === 0) return undefined;
+
+	return {
+		compactionCount,
+		microCompactCount,
+		trimCount,
+		truncationCount,
+		compactionFailures,
+		circuitBreakerTripped,
+	};
 }
 
 function formatPercent(value: number): string {

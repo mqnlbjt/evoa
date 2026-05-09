@@ -2,6 +2,7 @@ import type { AgentSession } from "../runtime/session.js";
 import { decideSandboxUse, type SandboxPolicy } from "./sandbox.js";
 import type { EvolvingAgentTool, ToolExecutionContext } from "./types.js";
 import { decideToolUse, toolCallLimitDecision, type ToolDecision } from "./policy.js";
+import { truncateToolOutput, type ToolOutputTruncationMetadata, type TruncateToolOutputOptions } from "./truncation.js";
 
 export interface ToolCall {
 	id: string;
@@ -10,6 +11,9 @@ export interface ToolCall {
 }
 
 export type ToolResultStatus = "success" | "error" | "denied" | "unknown" | "limit_exceeded" | "timeout";
+export type ToolErrorCategory = "unknown_tool" | "policy_denied" | "limit_exceeded" | "timeout" | "abort" | "validation" | "network" | "protocol" | "unsupported" | "execution" | "hook" | "sandbox" | "mcp_error";
+export type ToolErrorSource = "runtime" | "tool" | "mcp" | "policy" | "sandbox" | "hook";
+export type ToolErrorPhase = "preflight" | "permission" | "execute" | "normalize" | "postprocess";
 
 export interface ToolResult {
 	call: ToolCall;
@@ -17,6 +21,11 @@ export interface ToolResult {
 	status: ToolResultStatus;
 	output?: unknown;
 	errorMessage?: string;
+	errorCategory?: ToolErrorCategory;
+	errorSource?: ToolErrorSource;
+	errorPhase?: ToolErrorPhase;
+	retryable?: boolean;
+	rawErrorName?: string;
 	startedAt?: number;
 	endedAt?: number;
 	durationMs?: number;
@@ -35,8 +44,11 @@ export interface RuntimeHook {
 	afterToolResult?(session: AgentSession, result: ToolResult): Promise<ToolResult | void> | ToolResult | void;
 }
 
-export interface NormalizeToolResultOptions {
-	maxBytes?: number;
+export interface NormalizeToolResultOptions extends Partial<Pick<TruncateToolOutputOptions, "maxBytes" | "strategy" | "headBytes" | "tailBytes" | "includeMetadata">> {}
+
+export interface NormalizedToolResultContent {
+	content: string;
+	metadata: ToolOutputTruncationMetadata;
 }
 
 export interface ToolRegistryOptions {
@@ -79,6 +91,12 @@ export class ToolRegistry {
 		return new ToolRegistry(this.list(), { ...(this.options.sandboxPolicy ? { sandboxPolicy: this.options.sandboxPolicy } : {}) });
 	}
 
+	filterByAllowedTools(allowed: string[]): ToolRegistry {
+		const allowedSet = new Set(allowed);
+		const filtered = this.list().filter((tool) => allowedSet.has(tool.name));
+		return new ToolRegistry(filtered, { ...(this.options.sandboxPolicy ? { sandboxPolicy: this.options.sandboxPolicy } : {}) });
+	}
+
 	async close(): Promise<void> {
 		const results = await Promise.allSettled(this.disposables.map((dispose) => dispose()));
 		const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -89,20 +107,20 @@ export class ToolRegistry {
 		const startedAt = Date.now();
 		const limitDecision = toolCallLimitDecision(session.agent, session.toolCallCount);
 		if (limitDecision) {
-			return this.finalize(session, hooks, withTiming({ call, decision: limitDecision, status: "limit_exceeded", errorMessage: limitDecision.reason }, startedAt));
+			return this.finalize(session, hooks, withTiming(withToolError({ call, decision: limitDecision, status: "limit_exceeded", errorMessage: limitDecision.reason }, "limit_exceeded", "runtime", "preflight", false), startedAt));
 		}
 
 		session.toolCallCount += 1;
 		const tool = this.get(call.name);
 		if (!tool) {
 			const decision = { decision: "deny" as const, reason: `tool ${call.name} is not registered` };
-			return this.finalize(session, hooks, withTiming({ call, decision, status: "unknown", errorMessage: `Unknown tool: ${call.name}` }, startedAt));
+			return this.finalize(session, hooks, withTiming(withToolError({ call, decision, status: "unknown", errorMessage: `Unknown tool: ${call.name}` }, "unknown_tool", "runtime", "preflight", false), startedAt));
 		}
 
 		let currentCall = call;
 		let decision = decideToolUse(session.agent, session.task, tool);
 		if (decision.decision !== "allow") {
-			return this.finalize(session, hooks, withTiming(withToolLimits(tool, { call: currentCall, decision, status: "denied", errorMessage: decision.reason }), startedAt));
+			return this.finalize(session, hooks, withTiming(withToolLimits(tool, withToolError({ call: currentCall, decision, status: "denied", errorMessage: decision.reason }, "policy_denied", "policy", "permission", false)), startedAt));
 		}
 
 		for (const hook of hooks) {
@@ -110,13 +128,13 @@ export class ToolRegistry {
 			if (!hookResult) continue;
 			if (hookResult.decision === "deny") {
 				decision = { decision: "deny", reason: hookResult.reason };
-				return this.finalize(session, hooks, withTiming(withToolLimits(tool, {
+				return this.finalize(session, hooks, withTiming(withToolLimits(tool, withToolError({
 					call: currentCall,
 					decision,
 					status: "denied",
 					errorMessage: hookResult.reason,
 					metadata: { hookDecision: "deny" },
-				}), startedAt));
+				}, "hook", "hook", "permission", false)), startedAt));
 			}
 			if (hookResult.decision === "mutate") {
 				currentCall = { ...currentCall, input: hookResult.input };
@@ -127,27 +145,27 @@ export class ToolRegistry {
 			const sandboxDecision = decideSandboxUse({ session, tool, call: currentCall, policy: this.options.sandboxPolicy });
 			if (sandboxDecision.decision !== "allow") {
 				decision = { decision: "deny", reason: sandboxDecision.reason };
-				return this.finalize(session, hooks, withTiming(withToolLimits(tool, {
+				return this.finalize(session, hooks, withTiming(withToolLimits(tool, withToolError({
 					call: currentCall,
 					decision,
 					status: "denied",
 					errorMessage: sandboxDecision.reason,
 					metadata: { sandboxDecision: "deny", ...sandboxDecision.metadata },
-				}), startedAt));
+				}, "sandbox", "sandbox", "permission", false)), startedAt));
 			}
 		}
 
 		try {
-			const output = await executeWithTimeout(tool, currentCall.input, signal, { session, call: currentCall });
+			const output = await executeWithTimeout(tool, currentCall.input, signal, { session, call: currentCall, ...(this.options.sandboxPolicy?.mode ? { sandboxMode: this.options.sandboxPolicy.mode } : {}) });
 			return this.finalize(session, hooks, withTiming(withToolLimits(tool, { call: currentCall, decision, status: "success", output }), startedAt));
 		} catch (error) {
-			const timedOut = error instanceof ToolTimeoutError;
-			return this.finalize(session, hooks, withTiming(withToolLimits(tool, {
+			const classification = classifyToolError(error, currentCall.name);
+			return this.finalize(session, hooks, withTiming(withToolLimits(tool, withToolError({
 				call: currentCall,
 				decision,
-				status: timedOut ? "timeout" : "error",
+				status: classification.category === "timeout" ? "timeout" : "error",
 				errorMessage: error instanceof Error ? error.message : String(error),
-			}), startedAt));
+			}, classification.category, classification.source, classification.phase, classification.retryable, error instanceof Error ? error.name : undefined)), startedAt));
 		}
 	}
 
@@ -162,18 +180,49 @@ export class ToolRegistry {
 }
 
 export function normalizeToolResultContent(result: ToolResult, options: NormalizeToolResultOptions = {}): string {
+	return normalizeToolResultForModel(result, options).content;
+}
+
+export function normalizeToolResultForModel(result: ToolResult, options: NormalizeToolResultOptions = {}): NormalizedToolResultContent {
 	const maxBytes = options.maxBytes ?? result.maxResultBytes ?? defaultMaxResultBytes;
 	const value = result.errorMessage
-		? { status: result.status, error: result.errorMessage }
+		? { status: result.status, error: result.errorMessage, category: result.errorCategory, source: result.errorSource, phase: result.errorPhase, retryable: result.retryable }
 		: result.output ?? null;
-	const serialized = safeStringify(value);
-	if (byteLength(serialized) <= maxBytes) return serialized;
-	return safeStringify({ truncated: true, maxBytes, content: truncateUtf8(serialized, maxBytes) });
+	return truncateToolOutput(safeStringify(value), {
+		maxBytes,
+		strategy: options.strategy ?? "head-tail",
+		...(options.headBytes === undefined ? {} : { headBytes: options.headBytes }),
+		...(options.tailBytes === undefined ? {} : { tailBytes: options.tailBytes }),
+		includeMetadata: options.includeMetadata ?? true,
+	});
 }
 
 function withTiming(result: Omit<ToolResult, "startedAt" | "endedAt" | "durationMs">, startedAt: number): ToolResult {
 	const endedAt = Date.now();
 	return { ...result, startedAt, endedAt, durationMs: endedAt - startedAt };
+}
+
+function withToolError<T extends Omit<ToolResult, "startedAt" | "endedAt" | "durationMs">>(result: T, category: ToolErrorCategory, source: ToolErrorSource, phase: ToolErrorPhase, retryable: boolean, rawErrorName?: string): T {
+	return {
+		...result,
+		errorCategory: category,
+		errorSource: source,
+		errorPhase: phase,
+		retryable,
+		...(rawErrorName ? { rawErrorName } : {}),
+	};
+}
+
+function classifyToolError(error: unknown, toolName: string): { category: ToolErrorCategory; source: ToolErrorSource; phase: ToolErrorPhase; retryable: boolean } {
+	if (error instanceof ToolTimeoutError) return { category: "timeout", source: "runtime", phase: "execute", retryable: true };
+	const name = error instanceof Error ? error.name : "";
+	const message = error instanceof Error ? error.message : String(error);
+	if (name === "McpToolCallError") return { category: "mcp_error", source: "mcp", phase: "execute", retryable: false };
+	if (name === "AbortError" || message === "Operation aborted") return { category: "abort", source: "runtime", phase: "execute", retryable: false };
+	if (name === "WebFetchRequestTimeoutError" || message.includes("timed out")) return { category: "timeout", source: toolName === "web_fetch" ? "tool" : "runtime", phase: "execute", retryable: true };
+	if (toolName === "web_fetch" && /HTTP request failed|fetch failed|network|ENOTFOUND|ECONN|attempt/.test(message)) return { category: "network", source: "tool", phase: "execute", retryable: true };
+	if (/requires input|must be|invalid|Invalid|expected/.test(message)) return { category: "validation", source: "tool", phase: "execute", retryable: false };
+	return { category: "execution", source: "tool", phase: "execute", retryable: false };
 }
 
 function withToolLimits(tool: EvolvingAgentTool, result: Omit<ToolResult, "startedAt" | "endedAt" | "durationMs" | "maxResultBytes">): Omit<ToolResult, "startedAt" | "endedAt" | "durationMs"> {
@@ -215,18 +264,3 @@ function safeStringify(value: unknown): string {
 	}
 }
 
-function byteLength(value: string): number {
-	return Buffer.byteLength(value, "utf8");
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-	let bytes = 0;
-	let output = "";
-	for (const char of value) {
-		const next = Buffer.byteLength(char, "utf8");
-		if (bytes + next > maxBytes) break;
-		bytes += next;
-		output += char;
-	}
-	return output;
-}

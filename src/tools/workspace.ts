@@ -38,20 +38,24 @@ export function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) throw new Error("Operation aborted");
 }
 
-export async function resolveExistingInsideRoot(root: string, userPath: string): Promise<string> {
+export async function resolveExistingInsideRoot(root: string, userPath: string, sandboxMode?: string): Promise<string> {
 	const rootReal = await realpath(root);
 	const candidate = path.isAbsolute(userPath) ? userPath : path.resolve(rootReal, userPath);
 	await access(candidate, constants.F_OK);
 	const targetReal = await realpath(candidate);
-	assertInsideRoot(rootReal, targetReal);
+	if (sandboxMode !== "off") {
+		assertInsideRoot(rootReal, targetReal);
+	}
 	return targetReal;
 }
 
-export async function resolveCreatableInsideRoot(root: string, userPath: string): Promise<string> {
+export async function resolveCreatableInsideRoot(root: string, userPath: string, sandboxMode?: string): Promise<string> {
 	const rootReal = await realpath(root);
 	const candidate = path.isAbsolute(userPath) ? userPath : path.resolve(rootReal, userPath);
 	const parentReal = await realpath(path.dirname(candidate));
-	assertInsideRoot(rootReal, parentReal);
+	if (sandboxMode !== "off") {
+		assertInsideRoot(rootReal, parentReal);
+	}
 	const existing = await lstat(candidate).catch((error: unknown) => {
 		if (isNotFound(error)) return undefined;
 		throw error;

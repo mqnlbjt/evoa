@@ -58,7 +58,7 @@ function effectiveModelRouting(agentRouting: ModelRoutingSpec | undefined, comma
 function providerConfigs(command: ModelRoutedCommand): ProviderConfig[] {
 	const providers = command.providers ? Object.values(command.providers) : [];
 	const hasPrimary = providers.some((provider) => provider.id === command.provider);
-	return hasPrimary ? providers : [primaryProvider(command), ...providers];
+	return hasPrimary ? providers.map((provider) => provider.id === command.provider ? mergePrimaryProvider(provider, command) : provider) : [primaryProvider(command), ...providers];
 }
 
 function primaryProvider(command: ModelRoutedCommand): ProviderConfig {
@@ -70,19 +70,32 @@ function primaryProvider(command: ModelRoutedCommand): ProviderConfig {
 	};
 }
 
+function mergePrimaryProvider(provider: ProviderConfig, command: ModelRoutedCommand): ProviderConfig {
+	return {
+		...provider,
+		id: command.provider,
+		baseURL: command.baseURL,
+		format: command.providerFormat,
+		...(command.apiKey ? { apiKey: command.apiKey } : provider.apiKey ? { apiKey: provider.apiKey } : {}),
+	};
+}
+
 function routedModels(agent: AgentSpec): ModelSpec[] {
 	return [agent.model, ...Object.values(agent.modelRouting?.aliases ?? {})];
 }
 
 function registerModel(registry: ModelRegistry, command: ModelRoutedCommand, model: ModelSpec): void {
+	const maxOutputTokens = typeof model.options?.maxTokens === "number" ? model.options.maxTokens : undefined;
 	registry.registerModel(model.provider, {
 		id: model.model,
 		providerId: model.provider,
 		format: providerFormat(command, model.provider),
+		...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
 	});
 }
 
 function providerFormat(command: ModelRoutedCommand, providerId: string): ProviderFormat {
+	if (providerId === command.provider) return command.providerFormat;
 	return command.providers?.[providerId]?.format ?? command.providerFormat;
 }
 

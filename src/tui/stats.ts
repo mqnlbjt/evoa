@@ -42,6 +42,16 @@ export interface ToolNameStats {
 	outputBytes: number;
 }
 
+export interface ModelTurnUsageSnapshot {
+	turn: number;
+	purpose: string;
+	inputTokens: number;
+	outputTokens: number;
+	totalTokens: number;
+	source: string;
+	messageCount: number;
+}
+
 export interface TuiStatsSnapshot {
 	overview: {
 		eventCount: number;
@@ -69,6 +79,10 @@ export interface TuiStatsSnapshot {
 		outputTokensPerSecond?: number;
 		recentRequestId?: string;
 		recentStopReason?: string;
+		turnUsageHistory: ModelTurnUsageSnapshot[];
+		latestTurnUsage?: ModelTurnUsageSnapshot;
+		compactionCount: number;
+		contextTokens?: number;
 	};
 	tools: {
 		callCount: number;
@@ -128,6 +142,9 @@ export class TuiStatsAccumulator {
 	private ttftMs: number | undefined;
 	private recentRequestId: string | undefined;
 	private recentStopReason: string | undefined;
+	private readonly turnUsageHistory: ModelTurnUsageSnapshot[] = [];
+	private compactionCount = 0;
+	private latestContextTokens: number | undefined;
 	private pendingModelStartedAt: number | undefined;
 	private toolCallCount = 0;
 	private toolResultCount = 0;
@@ -157,6 +174,8 @@ export class TuiStatsAccumulator {
 		else if (event.type === "tool_call") this.applyToolCall(event);
 		else if (event.type === "tool_result") this.applyToolResult(event);
 		else if (event.type === "score") this.applyScore(event);
+		else if (event.type === "context_compaction") this.applyContextCompaction(event);
+		else if (event.type === "micro_compact") this.applyMicroCompact(event);
 		else if (event.type === "error") this.applyError(event.payload);
 	}
 
@@ -206,6 +225,11 @@ export class TuiStatsAccumulator {
 		if (durationMs !== undefined) this.modelDurationsMs.push(durationMs);
 		const usage = extractModelUsage(event.payload);
 		if (usage) addTokens(this.tokens, usage);
+		const turnUsage = extractTurnUsage(event.payload);
+		if (turnUsage) {
+			this.turnUsageHistory.push(turnUsage);
+			if (this.turnUsageHistory.length > 20) this.turnUsageHistory.shift();
+		}
 		this.recentRequestId = stringValue(objectPath(event.payload, ["requestId"])) ?? stringValue(objectPath(event.payload, ["metadata", "requestId"])) ?? this.recentRequestId;
 		this.recentStopReason = stringValue(objectPath(event.payload, ["metadata", "stopReason"])) ?? stringValue(objectPath(event.payload, ["metadata", "stop_reason"])) ?? this.recentStopReason;
 		this.pendingModelStartedAt = undefined;
@@ -232,6 +256,19 @@ export class TuiStatsAccumulator {
 		if (durationMs > 0) this.toolDurationsMs.push(durationMs);
 		this.addToolNameStats(result, durationMs);
 		this.addToolCategoryStats(result.name, durationMs);
+	}
+
+	private applyContextCompaction(event: TraceEvent): void {
+		this.compactionCount += 1;
+		const payload = objectRecord(event.payload);
+		const after = numberField(payload, "tokenEstimateAfter");
+		if (after !== undefined) this.latestContextTokens = after;
+	}
+
+	private applyMicroCompact(event: TraceEvent): void {
+		const payload = objectRecord(event.payload);
+		const after = numberField(payload, "tokenEstimateAfter");
+		if (after !== undefined) this.latestContextTokens = after;
 	}
 
 	private applyScore(event: TraceEvent): void {
@@ -277,6 +314,10 @@ export class TuiStatsAccumulator {
 			...(outputTokensPerSecond === undefined ? {} : { outputTokensPerSecond }),
 			...(this.recentRequestId ? { recentRequestId: this.recentRequestId } : {}),
 			...(this.recentStopReason ? { recentStopReason: this.recentStopReason } : {}),
+			turnUsageHistory: [...this.turnUsageHistory],
+			...(this.turnUsageHistory.length === 0 ? {} : { latestTurnUsage: this.turnUsageHistory[this.turnUsageHistory.length - 1] }),
+			compactionCount: this.compactionCount,
+			...(this.latestContextTokens === undefined ? {} : { contextTokens: this.latestContextTokens }),
 		};
 	}
 
@@ -381,6 +422,21 @@ function extractToolResult(payload: unknown): ExtractedToolResult | undefined {
 	if (!name || !status) return undefined;
 	const durationMs = numberField(value, "durationMs");
 	return { name, status, ...(durationMs === undefined ? {} : { durationMs }), inputBytes: estimateSerializedSize(call.input), outputBytes: estimateSerializedSize(value.output ?? value.errorMessage ?? value.metadata) };
+}
+
+function extractTurnUsage(payload: unknown): ModelTurnUsageSnapshot | undefined {
+	const value = objectRecord(payload);
+	const usage = objectRecord(value.turnUsage ?? value.usage);
+	const turn = numberField(value, "turn");
+	const inputEstimate = numberField(value, "inputTokenEstimate");
+	const messageCount = numberField(value, "messageCount");
+	if (turn === undefined) return undefined;
+	const inputTokens = usageFromRecord(usage)?.inputTokens ?? inputEstimate ?? 0;
+	const outputTokens = usageFromRecord(usage)?.outputTokens ?? 0;
+	const totalTokens = inputTokens + outputTokens;
+	const purpose = stringValue(value.purpose) ?? "main";
+	const source = stringValue(value.usageSource) ?? "estimated";
+	return { turn, purpose, inputTokens, outputTokens, totalTokens, source, messageCount: messageCount ?? 0 };
 }
 
 function extractModelUsage(payload: unknown): TokenStats | undefined {

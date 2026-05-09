@@ -63,14 +63,14 @@ function writeFileTool(options: ResolvedOptions): EvolvingAgentTool {
 		permission: { defaultDecision: "allow", riskLevel: "medium", requiresSandbox: true },
 		concurrency: "sequential",
 		timeoutMs: 5_000,
-		async execute(input, signal) {
+		async execute(input, signal, context) {
 			throwIfAborted(signal);
 			const parsed = objectInput(input);
 			const userPath = stringField(parsed, "path");
 			const content = stringField(parsed, "content");
 			const bytesWritten = Buffer.byteLength(content, "utf8");
 			if (bytesWritten > options.maxWriteBytes) throw new Error("Content is too large");
-			const target = await resolveCreatableInsideRoot(options.workspaceRoot, userPath);
+			const target = await resolveCreatableInsideRoot(options.workspaceRoot, userPath, context?.sandboxMode);
 			return withPathQueue(target, async () => {
 				throwIfAborted(signal);
 				const existing = await lstat(target).catch((error: unknown) => {
@@ -114,10 +114,10 @@ function editFileTool(options: ResolvedOptions): EvolvingAgentTool {
 		permission: { defaultDecision: "allow", riskLevel: "medium", requiresSandbox: true },
 		concurrency: "sequential",
 		timeoutMs: 5_000,
-		async execute(input, signal) {
+		async execute(input, signal, context) {
 			throwIfAborted(signal);
 			const parsed = objectInput(input);
-			const target = await resolveExistingInsideRoot(options.workspaceRoot, stringField(parsed, "path"));
+			const target = await resolveExistingInsideRoot(options.workspaceRoot, stringField(parsed, "path"), context?.sandboxMode);
 			const edits = editSpecs(parsed["edits"]);
 			return withPathQueue(target, async () => {
 				throwIfAborted(signal);
@@ -160,11 +160,11 @@ function bashTool(options: ResolvedOptions): EvolvingAgentTool {
 		concurrency: "sequential",
 		timeoutMs: options.bashMaxTimeoutMs + 1_000,
 		maxResultBytes: options.bashMaxOutputBytes + 1024,
-		async execute(input, signal) {
+		async execute(input, signal, context) {
 			throwIfAborted(signal);
 			const parsed = objectInput(input);
 			const command = stringField(parsed, "command");
-			const cwd = await resolveExistingInsideRoot(options.workspaceRoot, optionalStringField(parsed, "cwd") ?? ".");
+			const cwd = await resolveExistingInsideRoot(options.workspaceRoot, optionalStringField(parsed, "cwd") ?? ".", context?.sandboxMode);
 			const info = await stat(cwd);
 			if (!info.isDirectory()) throw new Error("cwd is not a directory");
 			const timeoutMs = Math.min(optionalNumberField(parsed, "timeoutMs") ?? options.bashTimeoutMs, options.bashMaxTimeoutMs);

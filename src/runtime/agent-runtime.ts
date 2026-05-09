@@ -3,6 +3,7 @@ import type { ModelClient, ModelMessage } from "../models/types.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
 import { ToolRegistry, type RuntimeHook } from "../tools/registry.js";
 import { createSubagentTool } from "../tools/subagent.js";
+import type { SubagentTranscriptStore } from "../sessions/subagent-transcript-store.js";
 import type { TraceEventObserver } from "./events.js";
 import { runAgentLoop } from "./loop.js";
 import { createAgentSession, type AgentSession } from "./session.js";
@@ -15,6 +16,7 @@ export interface AgentRuntimeOptions {
 	createId?: () => string;
 	now?: () => number;
 	subagents?: SubagentSpec[];
+	subagentTranscriptStore?: SubagentTranscriptStore;
 	createToolRegistryForAgent?: (agent: AgentSpec) => ToolRegistry;
 	memoryContextProvider?: (session: AgentSession) => Promise<{ stable?: ModelMessage; dynamic?: ModelMessage; stableItemIds: string[]; dynamicItemIds: string[] }>;
 	eventObserver?: TraceEventObserver;
@@ -48,7 +50,11 @@ export class AgentRuntime implements AgentRuntimeExecutor {
 				...(this.options.hooks ? { hooks: this.options.hooks } : {}),
 				createId,
 				...(this.options.now ? { now: this.options.now } : {}),
+				...(this.options.subagentTranscriptStore ? { transcriptStore: this.options.subagentTranscriptStore } : {}),
 			}));
+			if (!session.agent.tools.allowedTools.includes("subagent")) {
+				session.agent.tools = { ...session.agent.tools, allowedTools: [...session.agent.tools.allowedTools, "subagent"] };
+			}
 		}
 		const memoryContext = session.agent.runtime.memoryPolicy === "long-term" ? await this.options.memoryContextProvider?.(session) : undefined;
 		const loopOptions = {

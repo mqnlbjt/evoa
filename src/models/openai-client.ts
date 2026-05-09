@@ -88,13 +88,18 @@ export class OpenAIModelClient implements ModelClient {
 		const toolCalls = parseToolCalls(response);
 		const reasoning = parseReasoning(response);
 		const usage = normalizeUsage(response.usage);
+		const finishReason = response.choices?.[0]?.message ? (response.choices[0] as Record<string, unknown>).finish_reason as string | undefined : undefined;
 		return {
 			text: parseResponseText(response),
 			...(reasoning ? { reasoning } : {}),
 			...(toolCalls.length > 0 ? { toolCalls } : {}),
 			...(response._request_id ? { requestId: response._request_id } : {}),
 			...(usage ? { usage } : {}),
-			...(response._request_id || response.usage ? { metadata: { ...(response._request_id ? { requestId: response._request_id } : {}), ...(response.usage ? { usage: response.usage } : {}) } } : {}),
+			metadata: {
+				...(response._request_id ? { requestId: response._request_id } : {}),
+				...(response.usage ? { usage: response.usage } : {}),
+				...(finishReason ? { finishReason } : {}),
+			},
 		};
 	}
 

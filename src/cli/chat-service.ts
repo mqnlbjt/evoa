@@ -7,8 +7,8 @@ import { MemoryManager } from "../memory/manager.js";
 import { createMemoryTools } from "../memory/tools.js";
 import type { ModelClient, ModelMessage } from "../models/types.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
-import type { RunEndPayload, RunStartPayload, TraceEvent, TraceEventObserver } from "../runtime/events.js";
-import { appendUserMessage, createAgentSession } from "../runtime/session.js";
+import type { TraceEvent, TraceEventObserver } from "../runtime/events.js";
+import { appendUserMessage, createAgentSession, entriesFromMessages, type AgentSession, type SessionEntry } from "../runtime/session.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
 import type { AgentSessionStore, StoredAgentSession, StoredAgentStartupContext } from "../sessions/session-store.js";
 import { JsonSessionStore } from "../sessions/json-session-store.js";
@@ -38,6 +38,7 @@ export interface ChatServiceContext {
 	stored: StoredAgentSession | undefined;
 	sessionId: string;
 	messages: ModelMessage[];
+	entries: SessionEntry[];
 	now: () => number;
 	createId: () => string;
 	toolRegistry: ToolRegistry;
@@ -76,6 +77,7 @@ export async function createChatServiceContext(command: ChatCommand | TuiCommand
 		stored,
 		sessionId,
 		messages: chatMessages(stored, agent),
+		entries: chatEntries(stored, agent),
 		now: deps.now ?? Date.now,
 		createId: deps.createId ?? (() => crypto.randomUUID()),
 		toolRegistry,
@@ -88,6 +90,7 @@ export function startNewChatSession(context: ChatServiceContext): string {
 	const sessionId = context.createId();
 	context.sessionId = sessionId;
 	context.messages = chatMessages(undefined, context.agent);
+	context.entries = chatEntries(undefined, context.agent);
 	context.stored = undefined;
 	if (context.command.sessionId || context.command.resumeSessionId) context.command.sessionId = sessionId;
 	delete context.command.resumeSessionId;
@@ -96,7 +99,7 @@ export function startNewChatSession(context: ChatServiceContext): string {
 
 export async function runChatTurn(context: ChatServiceContext, prompt: string): Promise<ChatTurnOutput> {
 	const startMessageIndex = context.messages.length;
-	const session = createAgentSession({ id: context.sessionId, agent: context.agent, task: chatTask(context.command, prompt), messages: context.messages });
+	const session = createAgentSession({ id: context.sessionId, agent: context.agent, task: chatTask(context.command, prompt), entries: context.entries });
 	const startedAt = context.now();
 	appendUserMessage(session, prompt);
 	recordChatEvent(context, session, "run_start", { agent: context.agent, task: session.task });
@@ -104,9 +107,10 @@ export async function runChatTurn(context: ChatServiceContext, prompt: string): 
 		const output = await context.runtime.runSession(session);
 		recordChatEvent(context, session, "run_end", { status: "passed", durationMs: context.now() - startedAt });
 		context.messages = session.messages;
+			context.entries = session.entries ?? entriesFromMessages(session.messages);
 		await context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: memoryProjectId(context.command), messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId });
 		if (context.command.resumeSessionId || context.command.sessionId) {
-			const stored = storedSession(context.sessionId, context.agent, context.command, session.messages, context.stored, context.now());
+			const stored = storedSession(context.sessionId, context.agent, context.command, session, context.stored, context.now());
 			await context.sessionStore.saveSession(stored);
 			context.stored = stored;
 		}
@@ -123,8 +127,8 @@ function asChatCommand(command: ChatCommand | TuiCommand): ChatCommand {
 	return { ...command, kind: "chat" };
 }
 
-function recordChatEvent<TPayload extends RunStartPayload | RunEndPayload | { message: string }>(context: ChatServiceContext, session: ReturnType<typeof createAgentSession>, type: "run_start" | "run_end" | "error", payload: TPayload): void {
-	const event: TraceEvent<TPayload> = {
+function recordChatEvent(context: ChatServiceContext, session: ReturnType<typeof createAgentSession>, type: "run_start" | "run_end" | "error", payload: Record<string, unknown>): void {
+	const event = {
 		id: context.createId(),
 		type,
 		timestamp: context.now(),
@@ -132,7 +136,7 @@ function recordChatEvent<TPayload extends RunStartPayload | RunEndPayload | { me
 		taskId: session.task.id,
 		sessionId: session.id,
 		payload,
-	};
+	} as TraceEvent;
 	session.trace.push(event);
 	try {
 		void context.eventObserver?.(event);
@@ -202,10 +206,16 @@ function toolRegistryForAgent(command: ResolvedChatCommand | RunCommand | Benchm
 }
 
 function chatMessages(stored: StoredAgentSession | undefined, agent: AgentSpec): ModelMessage[] {
-	if (!stored) return [{ role: "system", content: agent.prompts.system }];
-	const messages = [...stored.messages];
-	if (messages[0]?.role === "system") return [{ ...messages[0], content: agent.prompts.system, contentBlocks: [{ type: "text", text: agent.prompts.system }] }, ...messages.slice(1)];
-	return [{ role: "system", content: agent.prompts.system }, ...messages];
+	return chatEntries(stored, agent).map((entry) => entry.message);
+}
+
+function chatEntries(stored: StoredAgentSession | undefined, agent: AgentSpec): SessionEntry[] {
+	const entries = stored?.entries ? [...stored.entries] : entriesFromMessages(stored?.messages ?? [{ role: "system", content: agent.prompts.system }]);
+	const first = entries[0];
+	if (first?.kind === "system") {
+		return [{ ...first, message: { ...first.message, content: agent.prompts.system, contentBlocks: [{ type: "text", text: agent.prompts.system }] } }, ...entries.slice(1)];
+	}
+	return [...entriesFromMessages([{ role: "system", content: agent.prompts.system }]), ...entries];
 }
 
 function resolveChatCommand(command: ChatCommand, stored: StoredAgentSession | undefined): ResolvedChatCommand {
@@ -242,7 +252,7 @@ function resolvedProviders(command: ChatCommand, stored: StoredAgentSession | un
 }
 
 function resolvedModelRouting(command: ChatCommand, stored: StoredAgentSession | undefined, modelOverride: boolean): ChatCommand["modelRouting"] {
-	return modelOverride ? command.modelRouting : (stored?.startupContext?.modelRouting ?? command.modelRouting);
+	return modelOverride ? undefined : (stored?.startupContext?.modelRouting ?? command.modelRouting);
 }
 
 function hasModelOverride(command: ChatCommand): boolean {
@@ -289,12 +299,14 @@ function chatSessionStore(command: ChatCommand, deps: ChatServiceDeps): AgentSes
 	return new JsonSessionStore(command.sessionDir ?? path.join(process.cwd(), ".evolving-agent", "sessions"));
 }
 
-function storedSession(id: string, agent: AgentSpec, command: ResolvedChatCommand, messages: StoredAgentSession["messages"], existing: StoredAgentSession | undefined, timestamp: number): StoredAgentSession {
+function storedSession(id: string, agent: AgentSpec, command: ResolvedChatCommand, session: AgentSession, existing: StoredAgentSession | undefined, timestamp: number): StoredAgentSession {
 	return {
 		id,
 		agentId: agent.id,
 		...(agent.version ? { agentVersion: agent.version } : {}),
-		messages,
+		schemaVersion: 2,
+		messages: session.messages,
+		...(session.entries ? { entries: session.entries } : {}),
 		startupContext: storedStartupContext(command),
 		createdAt: existing?.createdAt ?? timestamp,
 		updatedAt: timestamp,
