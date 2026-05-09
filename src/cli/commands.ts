@@ -30,7 +30,7 @@ import { createAgentSession, appendUserMessage, entriesFromMessages, type AgentS
 import { isAbortError } from "../runtime/timeout.js";
 import type { ModelClient, ModelMessage } from "../models/types.js";
 import { JsonSessionStore } from "../sessions/json-session-store.js";
-import { JsonMemoryStore } from "../memory/json-memory-store.js";
+import { SqliteMemoryStore } from "../memory/sqlite-memory-store.js";
 import { LlmMemoryExtractor } from "../memory/llm-extractor.js";
 import { MemoryManager } from "../memory/manager.js";
 import { createMemoryTools } from "../memory/tools.js";
@@ -490,7 +490,7 @@ function formatMcpServerDiagnosticHuman(server: McpServerDiagnostic): string {
 
 function createMemoryManager(agent: AgentSpec, command: ResolvedChatCommand, modelClient: ModelClient): MemoryManager | undefined {
 	if (agent.runtime.memoryPolicy !== "long-term") return undefined;
-	return new MemoryManager(new JsonMemoryStore(path.join(chatStorageRoot(command), ".evolving-agent", "memory")), new LlmMemoryExtractor(modelClient, agent));
+	return new MemoryManager(new SqliteMemoryStore(path.join(chatStorageRoot(command), ".evolving-agent", "memory")), new LlmMemoryExtractor(modelClient, agent));
 }
 
 function memoryProjectId(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): string {

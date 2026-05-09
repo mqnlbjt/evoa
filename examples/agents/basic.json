@@ -18,7 +18,7 @@
       },
       "runtime": {
         "maxTurns": 200,
-        "contextCompression": "off",
+        "contextCompression": "auto",
         "memoryPolicy": "long-term",
         "toolOutputBudget": {
           "perTool": {
@@ -53,7 +53,7 @@
         },
         "runtime": {
           "maxTurns": 20,
-          "contextCompression": "off"
+          "contextCompression": "auto"
         },
         "metadata": {
           "example": true
@@ -81,7 +81,7 @@
         },
         "runtime": {
           "maxTurns": 10,
-          "contextCompression": "off"
+          "contextCompression": "auto"
         },
         "metadata": {
           "example": true

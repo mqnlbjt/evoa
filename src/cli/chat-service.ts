@@ -1,7 +1,7 @@
 import path, { dirname } from "node:path";
 import { loadAgentDefinitionsFromFile } from "../agents/loader.js";
 import type { ModelRegistryOptions } from "../models/registry.js";
-import { JsonMemoryStore } from "../memory/json-memory-store.js";
+import { SqliteMemoryStore } from "../memory/sqlite-memory-store.js";
 import { LlmMemoryExtractor } from "../memory/llm-extractor.js";
 import { MemoryManager } from "../memory/manager.js";
 import { createMemoryTools } from "../memory/tools.js";
@@ -184,7 +184,7 @@ export async function loadAgentBundle(agentPath: string): Promise<{ agent: Agent
 
 function createMemoryManager(agent: AgentSpec, command: ResolvedChatCommand, modelClient: ModelClient): MemoryManager | undefined {
 	if (agent.runtime.memoryPolicy !== "long-term") return undefined;
-	return new MemoryManager(new JsonMemoryStore(path.join(chatStorageRoot(command), ".evolving-agent", "memory")), new LlmMemoryExtractor(modelClient, agent));
+	return new MemoryManager(new SqliteMemoryStore(path.join(chatStorageRoot(command), ".evolving-agent", "memory")), new LlmMemoryExtractor(modelClient, agent));
 }
 
 function registerMemoryTools(toolRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): void {
@@ -228,14 +228,19 @@ function createRuntime(command: ResolvedChatCommand, deps: ChatServiceDeps, suba
 	});
 }
 
-const autoContinueFollowUp = "If the task is not yet complete, continue executing until finished. Do not explain that you are continuing; call the necessary tools directly. If already complete, ignore this message and give the final answer.";
+const autoContinueFollowUps = [
+		"If the task is not yet complete, continue executing until finished. Do not explain that you are continuing; call the necessary tools directly. If already complete, ignore this message and give the final answer.",
+		"You planned more work but called no tools. If the task is incomplete, call tools NOW without further text. If complete, state the final answer.",
+		"Final check: you have not called tools for multiple turns. Either call tools immediately or confirm the task is done.",
+	] as const;
 
 function createAutoContinueFollowUpProvider(): FollowUpMessageProvider {
 	return (session, _response) => {
 		if (session.toolCallCount === 0) return [];
-		const count = session.messages.filter((m) => m.role === "user" && m.content === autoContinueFollowUp).length;
-		if (count >= 1) return [];
-		return [{ role: "user", content: autoContinueFollowUp, contentBlocks: [{ type: "text", text: autoContinueFollowUp }] }];
+		const count = session.messages.filter((m) => m.role === "user" && autoContinueFollowUps.includes(m.content as typeof autoContinueFollowUps[number])).length;
+		if (count >= autoContinueFollowUps.length) return [];
+ 		const message = autoContinueFollowUps[count]!;
+		return [{ role: "user", content: message, contentBlocks: [{ type: "text", text: message }] }];
 	};
 }
 
