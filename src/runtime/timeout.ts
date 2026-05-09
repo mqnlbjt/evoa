@@ -11,6 +11,40 @@ export function isRuntimeTimeoutError(error: unknown): error is RuntimeTimeoutEr
 	return error instanceof RuntimeTimeoutError;
 }
 
+export type InterruptReason = "cancelled" | "user_interrupt" | "parent_abort";
+
+export function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+	if (isRuntimeTimeoutError(error)) return false;
+	if (signal?.aborted) return true;
+	if (!(error instanceof Error)) return false;
+	return error.name === "AbortError" || error.message === "Operation aborted" || error.message === "User interrupted";
+}
+
+export function abortReason(signal?: AbortSignal): InterruptReason {
+	const reason = signal?.reason;
+	const message = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "";
+	if (/user|ctrl-c|interrupt/i.test(message)) return "user_interrupt";
+	if (/cancel/i.test(message)) return "cancelled";
+	return "parent_abort";
+}
+
+export function abortMessage(error: unknown, signal?: AbortSignal): string {
+	const reason = signal?.reason;
+	if (reason instanceof Error && reason.message) return reason.message;
+	if (typeof reason === "string" && reason) return reason;
+	if (error instanceof Error && error.message) return error.message;
+	return "Operation aborted";
+}
+
+export function throwIfRuntimeAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	const reason = signal.reason;
+	if (reason instanceof Error) throw reason;
+	const error = new Error(abortMessage(undefined, signal));
+	error.name = "AbortError";
+	throw error;
+}
+
 export async function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>, timeoutMs: number | undefined, parentSignal?: AbortSignal): Promise<T> {
 	if (timeoutMs === undefined) return run(parentSignal ?? new AbortController().signal);
 	const controller = new AbortController();

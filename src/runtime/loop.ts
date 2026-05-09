@@ -2,17 +2,22 @@ import type { TaskExecutionOutput } from "../benchmark/types.js";
 import type { ModelClient, ModelMessage, ModelPurpose, ModelRequest, ModelResponse, ModelToolDefinition, ModelTurnUsage, ModelUsage } from "../models/types.js";
 import { normalizeToolResultForModel, type ToolCall, type ToolRegistry, type RuntimeHook, type ToolResult } from "../tools/registry.js";
 import { decideToolUse } from "../tools/policy.js";
-import { estimateTextTokens, shouldMicroCompact, resolveContextBudget, resolveToolOutputBudget, isContextOverflowError } from "./budget.js";
+import { effectiveInputTokenLimit, estimateTextTokens, shouldMicroCompact, resolveContextBudget, resolveToolOutputBudget, isContextOverflowError } from "./budget.js";
 import { maybeCompactContext, type CompactionResult } from "./compaction.js";
 import { buildModelContextView, enforceContextBudget, type ContextTrimResult, type ContextView } from "./context-view.js";
 import { collapseContext, defaultContextCollapseConfig, shouldContextCollapse } from "./context-collapse.js";
 import { microCompact, shouldTimeBasedMicroCompact, timeBasedMicroCompact } from "./micro-compact.js";
 import { postCompactRestore } from "./post-compact-restore.js";
+import { persistLargeToolOutput } from "./tool-persistence.js";
 import { CacheBreakDetector, type CacheBreakResult } from "./cache-break.js";
+import { throwIfRuntimeAborted } from "./timeout.js";
 import { BudgetTracker, shouldAutoContinue, type TokenBudgetConfig } from "./token-budget.js";
-import type { BudgetDepletedPayload, CacheBreakPayload, ContextCompactionPayload, ContextTrimPayload, DiminishingReturnsPayload, MicroCompactPayload, ResponseTruncatedPayload, ToolResultPayload, ToolOutputTruncationMeta, TraceEvent, TraceEventObserver } from "./events.js";
-import { appendAssistantEntry, appendToolResultEntry, ensureSessionEntries, type AgentSession, type CompactionSessionEntry, type SessionEntry } from "./session.js";
+import type { BudgetDepletedPayload, CacheBreakPayload, ContextCompactionPayload, ContextTrimPayload, DiminishingReturnsPayload, FollowUpPayload, MicroCompactPayload, ResponseTruncatedPayload, ToolResultPayload, ToolOutputTruncationMeta, TraceEvent, TraceEventObserver } from "./events.js";
+import { appendAssistantEntry, appendToolResultEntry, appendUserEntry, ensureSessionEntries, type AgentSession, type CompactionSessionEntry, type SessionEntry } from "./session.js";
 import type { ToolOutputTruncationMetadata } from "../tools/truncation.js";
+
+export type FollowUpMessage = ModelMessage & { role: "user" };
+export type FollowUpMessageProvider = (session: AgentSession, response: ModelResponse) => Promise<FollowUpMessage[]> | FollowUpMessage[];
 
 export interface AgentLoopOptions {
 	modelClient: ModelClient;
@@ -25,6 +30,9 @@ export interface AgentLoopOptions {
 	memoryContextItemIds?: { stable: string[]; dynamic: string[] };
 	eventObserver?: TraceEventObserver;
 	contextTransform?: (messages: ModelMessage[], session: AgentSession) => ModelMessage[] | Promise<ModelMessage[]>;
+	getFollowUpMessages?: FollowUpMessageProvider;
+	toolResultStorageDir?: string;
+	onCompactionMemory?: (facts: string[], session: AgentSession, compactionEntryId: string) => void | Promise<void>;
 }
 
 export async function runAgentLoop(
@@ -41,6 +49,7 @@ export async function runAgentLoop(
 
 	const maxTurns = session.agent.runtime.maxTurns;
 	while (maxTurns === undefined || session.turnCount < maxTurns) {
+		throwIfRuntimeAborted(signal);
 		session.turnCount += 1;
 		const tools = modelTools(session, options.toolRegistry);
 		const budget = resolveContextBudget(session.agent);
@@ -78,11 +87,15 @@ export async function runAgentLoop(
 		}
 
 		const memoryContent = compactionMemoryContent(options);
+		throwIfRuntimeAborted(signal);
 		const compaction = await maybeCompactContext({ session, modelClient: options.modelClient, budget, contextView, createId, now, ...(signal ? { signal } : {}), ...(memoryContent ? { memoryContent } : {}) });
 		if (compaction.compacted || compaction.reason === "failed" || compaction.reason === "circuit_breaker") recordEvent(session, options, event(createId, now, "context_compaction", session, compaction));
 		updateCompactionFailureState(session, compaction);
 		if (compaction.compacted) {
 			contextView = buildModelContextView(session, viewOptions);
+			if (compaction.notableFacts && compaction.notableFacts.length > 0 && options.onCompactionMemory) {
+				await options.onCompactionMemory(compaction.notableFacts, session, compaction.entryId!);
+			}
 		}
 		const trim = enforceContextBudget(session, viewOptions);
 		if (trim.trimmed) recordEvent(session, options, event(createId, now, "context_trim", session, traceContextTrim(trim)));
@@ -104,6 +117,14 @@ export async function runAgentLoop(
 			recordEvent(session, options, event(createId, now, "context_transform", session, { messageCount: modelMessages.length }));
 		}
 
+		recordEvent(session, options, event(createId, now, "context_view", session, {
+			tokenEstimate: contextView.tokenEstimate,
+			budgetMaxTokens: budget.maxInputTokens,
+			budgetReserveTokens: budget.reserveTokens,
+			effectiveLimit: effectiveInputTokenLimit(budget),
+			usageFraction: contextView.tokenEstimate / budget.maxInputTokens,
+		}));
+
 		const purpose = modelPurpose(session, tools.length);
 		const request: ModelRequest = {
 			agent: session.agent,
@@ -117,6 +138,7 @@ export async function runAgentLoop(
 		};
 
 		let modelStartedAt = now();
+		throwIfRuntimeAborted(signal);
 		recordModelRequest(session, options, createId, now, request, purpose, contextView, modelStartedAt);
 		try {
 			lastResponse = await options.modelClient.complete(request, signal);
@@ -127,6 +149,7 @@ export async function runAgentLoop(
 			recordEvent(session, options, event(createId, now, "context_compaction", session, recovery));
 			updateCompactionFailureState(session, recovery);
 			if (!recovery.compacted) throw error;
+			throwIfRuntimeAborted(signal);
 			contextView = buildModelContextView(session, viewOptions);
 			const recoveryTrim = enforceContextBudget(session, viewOptions);
 			if (recoveryTrim.trimmed) recordEvent(session, options, event(createId, now, "context_trim", session, traceContextTrim(recoveryTrim)));
@@ -163,6 +186,12 @@ export async function runAgentLoop(
 		}
 
 		if (!lastResponse.toolCalls || lastResponse.toolCalls.length === 0) {
+			const followUpMessages = await stoppedTurnFollowUp(session, lastResponse, options);
+			if (followUpMessages.length > 0) {
+				for (const message of followUpMessages) appendUserEntry(session, message, createId(), now());
+				recordEvent(session, options, event(createId, now, "follow_up", session, followUpPayload(followUpMessages, session.turnCount)));
+				continue;
+			}
 			return { answer: lastResponse.text ?? "", trace: session.trace };
 		}
 
@@ -170,6 +199,7 @@ export async function runAgentLoop(
 			throw new Error("model requested tools but no tool registry was provided");
 		}
 
+		throwIfRuntimeAborted(signal);
 		const results = await executeToolCalls(
 			session,
 			lastResponse.toolCalls.map((modelCall) => ({ id: modelCall.id, name: modelCall.name, input: modelCall.input })),
@@ -180,6 +210,19 @@ export async function runAgentLoop(
 		);
 		for (const result of results) {
 			const toolBudget = resolveToolOutputBudget(session.agent, result.call.name, result.maxResultBytes);
+			if (options.toolResultStorageDir && typeof result.output === "string") {
+				const persisted = await persistLargeToolOutput(
+					result.output,
+					result.call.id,
+					result.call.name,
+					options.toolResultStorageDir,
+					session.id,
+					toolBudget.maxBytes,
+				);
+				if (persisted.persistedPath) {
+					result.output = persisted.content;
+				}
+			}
 			const normalized = normalizeToolResultForModel(result, toolBudget);
 			const entry = appendToolResultEntry(session, result, { id: createId(), createdAt: now(), content: normalized.content, truncation: normalized.metadata });
 			recordEvent(session, options, event(createId, now, "tool_result", session, traceToolResult(result, entry.id, normalized.content, normalized.metadata)));
@@ -202,6 +245,18 @@ export async function runAgentLoop(
 	return { answer: lastResponse?.text ?? "", trace: session.trace };
 }
 
+async function stoppedTurnFollowUp(session: AgentSession, response: ModelResponse, options: AgentLoopOptions): Promise<FollowUpMessage[]> {
+	return (await options.getFollowUpMessages?.(session, response)) ?? [];
+}
+
+function followUpPayload(messages: FollowUpMessage[], turn: number): FollowUpPayload {
+	return {
+		turn,
+		messageCount: messages.length,
+		messagesPreview: messages.map((message) => previewText(message.content)),
+	};
+}
+
 async function executeToolCalls(
 	session: AgentSession,
 	calls: ToolCall[],
@@ -213,6 +268,7 @@ async function executeToolCalls(
 	const results: ToolResult[] = [];
 	let index = 0;
 	while (index < calls.length) {
+		throwIfRuntimeAborted(signal);
 		const batch = [calls[index]!];
 		index += 1;
 		while (index < calls.length && isParallelSafe(options.toolRegistry, batch[0]!) && isParallelSafe(options.toolRegistry, calls[index]!)) {
@@ -221,9 +277,11 @@ async function executeToolCalls(
 		}
 
 		for (const call of batch) {
+			throwIfRuntimeAborted(signal);
 			recordEvent(session, options, event(createId, now, "tool_call", session, { call, concurrency: options.toolRegistry.get(call.name)?.concurrency ?? "sequential" }));
 		}
 
+		throwIfRuntimeAborted(signal);
 		const batchResults = batch.length > 1
 			? await Promise.all(batch.map((call) => options.toolRegistry.execute(session, call, options.hooks, signal)))
 			: [await options.toolRegistry.execute(session, batch[0]!, options.hooks, signal)];

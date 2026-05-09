@@ -53,6 +53,16 @@ export async function createToolRegistryForProfileAsync(options: ToolProfileOpti
 	return registry;
 }
 
+export function createToolRegistryWithBackgroundMcp(options: ToolProfileOptions): ToolRegistry {
+	const registry = createToolRegistryForProfile(options);
+	if (!options.mcpServers) return registry;
+	createMcpRuntimeBundle({ servers: options.mcpServers }).then((bundle) => {
+		for (const tool of bundle.tools) registry.register(tool);
+		registry.registerDisposable(bundle.close);
+	}).catch(() => {});
+	return registry;
+}
+
 function sandboxPolicyForProfile(profile: ToolProfile, workspaceRoot: string): SandboxPolicy {
 	const root = path.resolve(workspaceRoot);
 	if (profile === "coding") return { mode: "workspace", workspaceRoot: root, allowNetwork: true, allowBash: false };

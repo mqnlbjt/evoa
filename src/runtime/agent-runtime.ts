@@ -5,7 +5,7 @@ import { ToolRegistry, type RuntimeHook } from "../tools/registry.js";
 import { createSubagentTool } from "../tools/subagent.js";
 import type { SubagentTranscriptStore } from "../sessions/subagent-transcript-store.js";
 import type { TraceEventObserver } from "./events.js";
-import { runAgentLoop } from "./loop.js";
+import { runAgentLoop, type FollowUpMessageProvider } from "./loop.js";
 import { createAgentSession, type AgentSession } from "./session.js";
 import { minDefined, withTimeout } from "./timeout.js";
 
@@ -19,7 +19,10 @@ export interface AgentRuntimeOptions {
 	subagentTranscriptStore?: SubagentTranscriptStore;
 	createToolRegistryForAgent?: (agent: AgentSpec) => ToolRegistry;
 	memoryContextProvider?: (session: AgentSession) => Promise<{ stable?: ModelMessage; dynamic?: ModelMessage; stableItemIds: string[]; dynamicItemIds: string[] }>;
+	getFollowUpMessages?: FollowUpMessageProvider;
 	eventObserver?: TraceEventObserver;
+	toolResultStorageDir?: string;
+	onCompactionMemory?: (facts: string[], session: AgentSession, compactionEntryId: string) => void | Promise<void>;
 }
 
 export class AgentRuntime implements AgentRuntimeExecutor {
@@ -42,14 +45,11 @@ export class AgentRuntime implements AgentRuntimeExecutor {
 			toolRegistry.register(createSubagentTool({
 				subagents: this.options.subagents,
 				modelClient: this.options.modelClient,
-				createToolRegistryForAgent: (subagentAgent) => {
-					const registry = this.options.createToolRegistryForAgent?.(subagentAgent) ?? this.createToolRegistry(subagentAgent);
-					if (!registry) throw new Error(`no tool registry available for subagent ${subagentAgent.id}`);
-					return registry;
-				},
+				parentToolRegistry: toolRegistry,
 				...(this.options.hooks ? { hooks: this.options.hooks } : {}),
 				createId,
 				...(this.options.now ? { now: this.options.now } : {}),
+				...(this.options.toolResultStorageDir ? { toolResultStorageDir: this.options.toolResultStorageDir } : {}),
 				...(this.options.subagentTranscriptStore ? { transcriptStore: this.options.subagentTranscriptStore } : {}),
 			}));
 			if (!session.agent.tools.allowedTools.includes("subagent")) {
@@ -63,10 +63,13 @@ export class AgentRuntime implements AgentRuntimeExecutor {
 			...(toolRegistry ? { toolRegistry } : {}),
 			...(this.options.hooks ? { hooks: this.options.hooks } : {}),
 			...(this.options.now ? { now: this.options.now } : {}),
+			...(this.options.toolResultStorageDir ? { toolResultStorageDir: this.options.toolResultStorageDir } : {}),
 			...(memoryContext?.stable ? { stableMemoryContext: memoryContext.stable } : {}),
 			...(memoryContext?.dynamic ? { dynamicMemoryContext: memoryContext.dynamic } : {}),
 			...(memoryContext ? { memoryContextItemIds: { stable: memoryContext.stableItemIds, dynamic: memoryContext.dynamicItemIds } } : {}),
+			...(this.options.getFollowUpMessages ? { getFollowUpMessages: this.options.getFollowUpMessages } : {}),
 			...(this.options.eventObserver ? { eventObserver: this.options.eventObserver } : {}),
+			...(this.options.onCompactionMemory ? { onCompactionMemory: this.options.onCompactionMemory } : {}),
 		};
 		return withTimeout((timeoutSignal) => runAgentLoop(session, loopOptions, timeoutSignal), minDefined(session.task.timeoutMs, session.agent.runtime.timeoutMs), signal);
 	}

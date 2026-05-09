@@ -19,9 +19,11 @@ export type TraceEventType =
 	| "cache_break"
 	| "budget_depleted"
 	| "diminishing_returns"
+	| "follow_up"
 	| "tool_call"
 	| "tool_result"
 	| "score"
+	| "interrupted"
 	| "error";
 
 export type TraceEvent =
@@ -43,9 +45,11 @@ export type TraceEvent =
 	| TraceEventBase<"cache_break", CacheBreakPayload>
 	| TraceEventBase<"budget_depleted", BudgetDepletedPayload>
 	| TraceEventBase<"diminishing_returns", DiminishingReturnsPayload>
+	| TraceEventBase<"follow_up", FollowUpPayload>
 	| TraceEventBase<"tool_call", Record<string, unknown>>
 	| TraceEventBase<"tool_result", ToolResultPayload>
 	| TraceEventBase<"score", ScorePayload>
+	| TraceEventBase<"interrupted", InterruptedPayload>
 	| TraceEventBase<"error", Record<string, unknown>>;
 
 export interface TraceEventBase<TType extends TraceEventType, TPayload = unknown> {
@@ -69,8 +73,13 @@ export interface RunStartPayload {
 }
 
 export interface RunEndPayload {
-	status: "passed" | "failed" | "errored" | "timeout";
+	status: "passed" | "failed" | "errored" | "timeout" | "interrupted";
 	durationMs: number;
+}
+
+export interface InterruptedPayload {
+	reason: "cancelled" | "user_interrupt" | "parent_abort";
+	message?: string;
 }
 
 export interface ScorePayload {
@@ -168,6 +177,12 @@ export interface BudgetDepletedPayload {
 export interface DiminishingReturnsPayload {
 	noToolCallStreak: number;
 	turn: number;
+}
+
+export interface FollowUpPayload {
+	turn: number;
+	messageCount: number;
+	messagesPreview: string[];
 }
 
 export interface ResponseTruncatedPayload {

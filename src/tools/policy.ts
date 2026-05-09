@@ -19,7 +19,7 @@ export function decideToolUse(agent: AgentSpec, task: TaskSpec, tool: EvolvingAg
 		return { decision: "deny", reason: `tool ${tool.name} is denied by agent policy` };
 	}
 
-	if (!agent.tools.allowedTools.includes(tool.name)) {
+	if (!tool.name.startsWith("mcp__") && !agent.tools.allowedTools.includes(tool.name)) {
 		return { decision: "deny", reason: `tool ${tool.name} is not in agent allowed tools` };
 	}
 

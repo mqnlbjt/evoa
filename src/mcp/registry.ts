@@ -28,35 +28,51 @@ export interface CreateMcpRuntimeBundleOptions {
 
 export async function createMcpRuntimeBundle(options: CreateMcpRuntimeBundleOptions = {}): Promise<McpRuntimeBundle> {
 	const entries = Object.entries(options.servers ?? {});
+	if (entries.length === 0) return { tools: [], diagnostics: [], close: async () => {} };
+	const clientFactory = options.clientFactory ?? createMcpClient;
+	const results = await Promise.allSettled(entries.map(async ([serverName, config]) => {
+		const failPolicy = mcpFailPolicy(config);
+		if (config.enabled === false) {
+			return { diagnostic: disabledDiagnostic(serverName, config, failPolicy), tools: [], client: undefined };
+		}
+		normalizeMcpName(serverName);
+		const client = await clientFactory(serverName, config);
+		try {
+			const remoteTools = await client.listTools();
+			const wrappedTools = createMcpTools({ serverName, client, tools: remoteTools, ...(config.timeoutMs ? { timeoutMs: config.timeoutMs } : {}), ...(config.resources !== undefined ? { resources: config.resources } : {}) });
+			return { diagnostic: { name: serverName, enabled: true, type: config.type, failPolicy, status: client.status, toolCount: remoteTools.length, resourceHelpersEnabled: config.resources === true }, tools: wrappedTools, client };
+		} catch (error) {
+			try { await client.close(); } catch { /* best effort */ }
+			throw error;
+		}
+	}));
+
 	const clients: McpClientHandle[] = [];
 	const tools: EvolvingAgentTool[] = [];
 	const diagnostics: McpRuntimeServerDiagnostic[] = [];
-	const clientFactory = options.clientFactory ?? createMcpClient;
-	for (const [serverName, config] of entries) {
-		const failPolicy = mcpFailPolicy(config);
-		if (config.enabled === false) {
-			diagnostics.push(disabledDiagnostic(serverName, config, failPolicy));
-			continue;
-		}
-		let client: McpClientHandle | undefined;
-		try {
-			normalizeMcpName(serverName);
-			client = await clientFactory(serverName, config);
-			const remoteTools = await client.listTools();
-			const wrappedTools = createMcpTools({ serverName, client, tools: remoteTools, ...(config.timeoutMs ? { timeoutMs: config.timeoutMs } : {}), ...(config.resources !== undefined ? { resources: config.resources } : {}) });
-			clients.push(client);
-			tools.push(...wrappedTools);
-			diagnostics.push({ name: serverName, enabled: true, type: config.type, failPolicy, status: client.status, toolCount: remoteTools.length, resourceHelpersEnabled: config.resources === true });
-		} catch (error) {
-			if (client) await closeBestEffort([client]);
+	let firstError: unknown;
+
+	for (const [i, result] of results.entries()) {
+		const [, config] = entries[i]!;
+		if (result.status === "fulfilled") {
+			if (result.value.client) clients.push(result.value.client);
+			tools.push(...result.value.tools);
+			diagnostics.push(result.value.diagnostic);
+		} else {
+			const failPolicy = mcpFailPolicy(config);
 			if (failPolicy === "warn") {
-				diagnostics.push(failedDiagnostic(serverName, config, failPolicy, error));
+				diagnostics.push(failedDiagnostic(entries[i]![0], config, failPolicy, result.reason));
 				continue;
 			}
-			await closeBestEffort(clients);
-			throw error;
+			firstError = result.reason;
 		}
 	}
+
+	if (firstError) {
+		await closeBestEffort(clients);
+		throw firstError;
+	}
+
 	return { tools, diagnostics, close: () => closeClients(clients) };
 }
 

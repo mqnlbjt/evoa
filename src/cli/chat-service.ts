@@ -8,12 +8,14 @@ import { createMemoryTools } from "../memory/tools.js";
 import type { ModelClient, ModelMessage } from "../models/types.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { TraceEvent, TraceEventObserver } from "../runtime/events.js";
+import type { FollowUpMessageProvider } from "../runtime/loop.js";
 import { appendUserMessage, createAgentSession, entriesFromMessages, type AgentSession, type SessionEntry } from "../runtime/session.js";
+import { abortMessage, abortReason, isAbortError, isRuntimeTimeoutError } from "../runtime/timeout.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
 import type { AgentSessionStore, StoredAgentSession, StoredAgentStartupContext } from "../sessions/session-store.js";
 import { JsonSessionStore } from "../sessions/json-session-store.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { createToolRegistryForProfile } from "../tools/profiles.js";
+import { createToolRegistryForProfileAsync, createToolRegistryWithBackgroundMcp } from "../tools/profiles.js";
 import type { BenchmarkCommand, ChatCommand, EvolveCommand, RunCommand, TuiCommand } from "./args.js";
 import { createRoutedModelClient, effectiveAgentForCommand } from "./model-routing.js";
 
@@ -66,7 +68,7 @@ export async function createChatServiceContext(command: ChatCommand | TuiCommand
 	const sessionId = resolvedCommand.resumeSessionId ?? resolvedCommand.sessionId ?? (deps.createId?.() ?? crypto.randomUUID());
 	const modelClient = createRoutedModelClient(resolvedCommand, deps, agent);
 	const memoryManager = createMemoryManager(agent, resolvedCommand, modelClient);
-	const toolRegistry = createToolRegistry(resolvedCommand, deps);
+	const toolRegistry = createChatToolRegistry(resolvedCommand, deps);
 	registerMemoryTools(toolRegistry, resolvedCommand, deps, memoryManager);
 	const runtime = createRuntime(resolvedCommand, deps, bundle.subagents, toolRegistry, memoryManager, modelClient, options.eventObserver);
 	return {
@@ -97,29 +99,39 @@ export function startNewChatSession(context: ChatServiceContext): string {
 	return sessionId;
 }
 
-export async function runChatTurn(context: ChatServiceContext, prompt: string): Promise<ChatTurnOutput> {
+export async function runChatTurn(context: ChatServiceContext, prompt: string, signal?: AbortSignal): Promise<ChatTurnOutput> {
 	const startMessageIndex = context.messages.length;
 	const session = createAgentSession({ id: context.sessionId, agent: context.agent, task: chatTask(context.command, prompt), entries: context.entries });
 	const startedAt = context.now();
 	appendUserMessage(session, prompt);
 	recordChatEvent(context, session, "run_start", { agent: context.agent, task: session.task });
 	try {
-		const output = await context.runtime.runSession(session);
+		const output = await context.runtime.runSession(session, signal);
 		recordChatEvent(context, session, "run_end", { status: "passed", durationMs: context.now() - startedAt });
-		context.messages = session.messages;
-			context.entries = session.entries ?? entriesFromMessages(session.messages);
-		await context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: memoryProjectId(context.command), messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId });
-		if (context.command.resumeSessionId || context.command.sessionId) {
-			const stored = storedSession(context.sessionId, context.agent, context.command, session, context.stored, context.now());
-			await context.sessionStore.saveSession(stored);
-			context.stored = stored;
-		}
+		await finalizeChatTurn(context, session, startMessageIndex, true);
 		return { answer: output.answer ?? "", trace: output.trace ?? [] };
 	} catch (error) {
+		if (isAbortError(error, signal)) {
+			recordChatEvent(context, session, "interrupted", { reason: abortReason(signal), message: abortMessage(error, signal) });
+			recordChatEvent(context, session, "run_end", { status: "interrupted", durationMs: context.now() - startedAt });
+			await finalizeChatTurn(context, session, startMessageIndex, false);
+			throw error;
+		}
+		const status = isRuntimeTimeoutError(error) ? "timeout" : "errored";
 		recordChatEvent(context, session, "error", { message: error instanceof Error ? error.message : String(error) });
-		recordChatEvent(context, session, "run_end", { status: "errored", durationMs: context.now() - startedAt });
+		recordChatEvent(context, session, "run_end", { status, durationMs: context.now() - startedAt });
 		throw error;
 	}
+}
+
+async function finalizeChatTurn(context: ChatServiceContext, session: AgentSession, startMessageIndex: number, recordMemory: boolean): Promise<void> {
+	context.messages = session.messages;
+	context.entries = session.entries ?? entriesFromMessages(session.messages);
+	if (recordMemory) context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: memoryProjectId(context.command), messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId, force: true }).catch(() => {});
+	if (!context.command.resumeSessionId && !context.command.sessionId) return;
+	const stored = storedSession(context.sessionId, context.agent, context.command, session, context.stored, context.now());
+	await context.sessionStore.saveSession(stored);
+	context.stored = stored;
 }
 
 function asChatCommand(command: ChatCommand | TuiCommand): ChatCommand {
@@ -127,7 +139,7 @@ function asChatCommand(command: ChatCommand | TuiCommand): ChatCommand {
 	return { ...command, kind: "chat" };
 }
 
-function recordChatEvent(context: ChatServiceContext, session: ReturnType<typeof createAgentSession>, type: "run_start" | "run_end" | "error", payload: Record<string, unknown>): void {
+function recordChatEvent(context: ChatServiceContext, session: ReturnType<typeof createAgentSession>, type: "run_start" | "run_end" | "interrupted" | "error", payload: Record<string, unknown>): void {
 	const event = {
 		id: context.createId(),
 		type,
@@ -145,10 +157,10 @@ function recordChatEvent(context: ChatServiceContext, session: ReturnType<typeof
 	}
 }
 
-export function createRuntimeForCommand(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, subagents: SubagentSpec[] = [], memoryManager?: MemoryManager, modelClient = createModelClient(command, deps), eventObserver?: TraceEventObserver): AgentRuntime {
-	const toolRegistry = createToolRegistry(command, deps);
+export async function createRuntimeForCommand(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, subagents: SubagentSpec[] = [], memoryManager?: MemoryManager, modelClient = createModelClient(command, deps), eventObserver?: TraceEventObserver): Promise<AgentRuntime> {
+	const toolRegistry = await createToolRegistry(command, deps);
 	registerMemoryTools(toolRegistry, command, deps, memoryManager);
-	const createToolRegistryForAgent = () => toolRegistryForAgent(command, deps, memoryManager);
+	const createToolRegistryForAgent = () => toolRegistryForAgent(toolRegistry, command, deps, memoryManager);
 	return new AgentRuntime({
 		modelClient,
 		toolRegistry,
@@ -157,7 +169,9 @@ export function createRuntimeForCommand(command: ResolvedChatCommand | RunComman
 		...(subagents.length > 0 ? { subagents } : {}),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
+		...(command.kind === "chat" ? { getFollowUpMessages: createAutoContinueFollowUpProvider() } : {}),
 		...(eventObserver ? { eventObserver } : {}),
+		...(deps.workspaceRoot ? { toolResultStorageDir: path.join(deps.workspaceRoot, ".evolving-agent") } : {}),
 	});
 }
 
@@ -181,26 +195,62 @@ function registerMemoryTools(toolRegistry: ToolRegistry, command: ResolvedChatCo
 }
 
 function createRuntime(command: ResolvedChatCommand, deps: ChatServiceDeps, subagents: SubagentSpec[], toolRegistry: ToolRegistry, memoryManager: MemoryManager | undefined, modelClient: ModelClient, eventObserver?: TraceEventObserver): AgentRuntime {
-	const createToolRegistryForAgent = () => toolRegistryForAgent(command, deps, memoryManager);
+	const createToolRegistryForAgent = () => toolRegistryForAgent(toolRegistry, command, deps, memoryManager);
+	const createId = deps.createId ?? (() => crypto.randomUUID());
+	const now = deps.now ?? Date.now;
 	return new AgentRuntime({
 		modelClient,
 		toolRegistry,
 		createToolRegistryForAgent,
-		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectId(command), prompt: session.task.prompt, now: deps.now ?? Date.now }) } : {}),
+		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectId(command), prompt: session.task.prompt, now }) } : {}),
 		...(subagents.length > 0 ? { subagents } : {}),
-		...(deps.now ? { now: deps.now } : {}),
-		...(deps.createId ? { createId: deps.createId } : {}),
+		...(deps.now ? { now } : {}),
+		...(deps.createId ? { createId } : {}),
+		getFollowUpMessages: createAutoContinueFollowUpProvider(),
 		...(eventObserver ? { eventObserver } : {}),
+		...(deps.workspaceRoot ? { toolResultStorageDir: path.join(deps.workspaceRoot, ".evolving-agent") } : {}),
+		...(memoryManager ? {
+			onCompactionMemory: async (facts, session, compactionEntryId) => {
+				const candidates = facts.map((fact) => ({
+					layer: "knowledge" as const,
+					content: fact,
+					sourceRefs: [{
+						kind: "trace_event" as const,
+						id: compactionEntryId,
+						sessionId: session.id,
+						excerptHash: String(fact.length ^ fact.charCodeAt(0) ^ fact.charCodeAt(fact.length - 1)),
+					}],
+					metadata: { suitability: "long_term" as const },
+				}));
+				await memoryManager.recordCandidates(candidates, session.agent.id, now, createId);
+			},
+		} : {}),
 	});
 }
 
-function createToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ToolRegistry {
-	const workspaceRoot = deps.workspaceRoot ?? process.cwd();
-	return deps.toolRegistry ?? createToolRegistryForProfile({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(deps.enableTuiAutomationTools === false ? {} : { tuiAutomation: { deps } }) });
+const autoContinueFollowUp = "If the task is not yet complete, continue executing until finished. Do not explain that you are continuing; call the necessary tools directly. If already complete, ignore this message and give the final answer.";
+
+function createAutoContinueFollowUpProvider(): FollowUpMessageProvider {
+	return (session, _response) => {
+		if (session.toolCallCount === 0) return [];
+		const count = session.messages.filter((m) => m.role === "user" && m.content === autoContinueFollowUp).length;
+		if (count >= 1) return [];
+		return [{ role: "user", content: autoContinueFollowUp, contentBlocks: [{ type: "text", text: autoContinueFollowUp }] }];
+	};
 }
 
-function toolRegistryForAgent(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): ToolRegistry {
-	const registry = deps.toolRegistry ?? createToolRegistry(command, deps);
+async function createToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): Promise<ToolRegistry> {
+	const workspaceRoot = deps.workspaceRoot ?? process.cwd();
+	return deps.toolRegistry ?? createToolRegistryForProfileAsync({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(deps.enableTuiAutomationTools === false ? {} : { tuiAutomation: { deps } }), ...(command.mcpServers ? { mcpServers: command.mcpServers } : {}) });
+}
+
+function createChatToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ToolRegistry {
+	const workspaceRoot = deps.workspaceRoot ?? process.cwd();
+	return deps.toolRegistry ?? createToolRegistryWithBackgroundMcp({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(deps.enableTuiAutomationTools === false ? {} : { tuiAutomation: { deps } }), ...(command.mcpServers ? { mcpServers: command.mcpServers } : {}) });
+}
+
+function toolRegistryForAgent(baseRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): ToolRegistry {
+	const registry = deps.toolRegistry ?? baseRegistry.clone();
 	registerMemoryTools(registry, command, deps, memoryManager);
 	return registry;
 }

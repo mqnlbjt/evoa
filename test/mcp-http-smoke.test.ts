@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -7,10 +10,12 @@ import { z } from "zod";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage, MessageExtraInfo } from "@modelcontextprotocol/sdk/types.js";
 import { AgentRuntime } from "../src/runtime/agent-runtime.js";
+import { main } from "../src/cli/main.js";
 import { createHttpMcpClient } from "../src/mcp/client.js";
 import { createToolRegistryForProfileAsync } from "../src/tools/profiles.js";
 import type { ModelClient } from "../src/models/types.js";
 import type { AgentSpec, TaskSpec } from "../src/specs.js";
+import { createIO, fakeToolOpenAIClient, nextId } from "./helpers/cli.js";
 
 describe("HTTP MCP client smoke", () => {
 	it("connects, lists tools, calls a tool, and closes over Streamable HTTP", async () => {
@@ -43,6 +48,34 @@ describe("HTTP MCP client smoke", () => {
 			]));
 		} finally {
 			await registry.close();
+			await server.close();
+		}
+	});
+
+	it("registers configured MCP tools for chat service runs", async () => {
+		const server = await startHttpMcpServer();
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-mcp-chat-"));
+		const agentFile = path.join(root, "agent.json");
+		const configFile = path.join(root, "config.json");
+		const traceFile = path.join(root, "trace.json");
+		await writeFile(agentFile, JSON.stringify(agent));
+		await writeFile(configFile, JSON.stringify({ mcpServers: { smoke: { type: "http", url: server.url, timeoutMs: 3000 } } }));
+		const io = createIO();
+		try {
+			const code = await main(["chat", "Call echo", "--agent", agentFile, "--provider", "local", "--model", "gpt-5.5", "--base-url", "http://localhost:8317/v1", "--config", configFile, "--trace", traceFile, "--json"], {
+				...io,
+				openAIClientFactory: () => fakeToolOpenAIClient("mcp__smoke__echo", { text: "hi from chat" }, "done"),
+				workspaceRoot: root,
+				now: () => 1,
+				createId: nextId(),
+			});
+
+			expect(code).toBe(0);
+			expect(JSON.parse(io.stdoutText())).toMatchObject({ ok: true, answer: "done" });
+			expect(JSON.parse(await readFile(traceFile, "utf8")).trace).toEqual(expect.arrayContaining([
+				expect.objectContaining({ type: "tool_result", payload: expect.objectContaining({ status: "success", visibleContentPreview: expect.stringContaining("hi from chat") }) }),
+			]));
+		} finally {
 			await server.close();
 		}
 	});

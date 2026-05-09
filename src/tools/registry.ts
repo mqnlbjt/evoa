@@ -1,4 +1,5 @@
 import type { AgentSession } from "../runtime/session.js";
+import { isAbortError } from "../runtime/timeout.js";
 import { decideSandboxUse, type SandboxPolicy } from "./sandbox.js";
 import type { EvolvingAgentTool, ToolExecutionContext } from "./types.js";
 import { decideToolUse, toolCallLimitDecision, type ToolDecision } from "./policy.js";
@@ -92,6 +93,7 @@ export class ToolRegistry {
 	}
 
 	filterByAllowedTools(allowed: string[]): ToolRegistry {
+		if (allowed.includes("*")) return this;
 		const allowedSet = new Set(allowed);
 		const filtered = this.list().filter((tool) => allowedSet.has(tool.name));
 		return new ToolRegistry(filtered, { ...(this.options.sandboxPolicy ? { sandboxPolicy: this.options.sandboxPolicy } : {}) });
@@ -160,6 +162,7 @@ export class ToolRegistry {
 			return this.finalize(session, hooks, withTiming(withToolLimits(tool, { call: currentCall, decision, status: "success", output }), startedAt));
 		} catch (error) {
 			const classification = classifyToolError(error, currentCall.name);
+			if (classification.category === "abort") throw error;
 			return this.finalize(session, hooks, withTiming(withToolLimits(tool, withToolError({
 				call: currentCall,
 				decision,
@@ -218,7 +221,7 @@ function classifyToolError(error: unknown, toolName: string): { category: ToolEr
 	const name = error instanceof Error ? error.name : "";
 	const message = error instanceof Error ? error.message : String(error);
 	if (name === "McpToolCallError") return { category: "mcp_error", source: "mcp", phase: "execute", retryable: false };
-	if (name === "AbortError" || message === "Operation aborted") return { category: "abort", source: "runtime", phase: "execute", retryable: false };
+	if (isAbortError(error)) return { category: "abort", source: "runtime", phase: "execute", retryable: false };
 	if (name === "WebFetchRequestTimeoutError" || message.includes("timed out")) return { category: "timeout", source: toolName === "web_fetch" ? "tool" : "runtime", phase: "execute", retryable: true };
 	if (toolName === "web_fetch" && /HTTP request failed|fetch failed|network|ENOTFOUND|ECONN|attempt/.test(message)) return { category: "network", source: "tool", phase: "execute", retryable: true };
 	if (/requires input|must be|invalid|Invalid|expected/.test(message)) return { category: "validation", source: "tool", phase: "execute", retryable: false };

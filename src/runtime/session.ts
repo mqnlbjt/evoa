@@ -149,12 +149,18 @@ export function createAgentSession(options: AgentSessionOptions): AgentSession {
 }
 
 export function appendUserMessage(session: AgentSession, content: string): void {
-	appendEntry(session, {
-		id: createEntryId(),
+	appendUserEntry(session, { role: "user", content });
+}
+
+export function appendUserEntry(session: AgentSession, message: ModelMessage & { role: "user" }, id = createEntryId(), createdAt = Date.now()): UserSessionEntry {
+	const entry: UserSessionEntry = {
+		id,
 		kind: "user",
-		createdAt: Date.now(),
-		message: { role: "user", content },
-	});
+		createdAt,
+		message,
+	};
+	appendEntry(session, entry);
+	return entry;
 }
 
 export function appendAssistantEntry(session: AgentSession, response: ModelResponse, id = createEntryId(), createdAt = Date.now()): AssistantSessionEntry | undefined {
