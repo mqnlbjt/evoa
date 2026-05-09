@@ -33,10 +33,54 @@ export interface ToolPolicySpec {
 	maxToolCalls?: number;
 }
 
+export interface TimeBasedMicroCompactSpec {
+	enabled?: boolean;
+	gapThresholdMinutes?: number;
+	keepRecent?: number;
+}
+
+export interface MicroCompactSpec {
+	enabled?: boolean;
+	compactableToolNames?: string[];
+	keepRecentTools?: number;
+	timeBased?: TimeBasedMicroCompactSpec;
+}
+
+export interface ContextCollapseSpec {
+	enabled?: boolean;
+	preserveRecentTurns?: number;
+}
+
+export interface ContextBudgetSpec {
+	maxInputTokens?: number;
+	reserveTokens?: number;
+	keepRecentTokens?: number;
+	triggerRatio?: number;
+	summaryMaxTokens?: number;
+	maxCompactionsPerRun?: number;
+	maxConsecutiveCompactionFailures?: number;
+	failureMode?: "continue" | "error";
+	microCompact?: MicroCompactSpec;
+	contextCollapse?: ContextCollapseSpec;
+	iterativeSummary?: boolean;
+}
+
+export interface ToolOutputBudgetSpec {
+	maxBytes?: number;
+	strategy?: "head-tail" | "head-only";
+	headBytes?: number;
+	tailBytes?: number;
+	includeMetadata?: boolean;
+	perTool?: Record<string, Omit<ToolOutputBudgetSpec, "perTool">>;
+}
+
 export interface RuntimePolicySpec {
-	maxTurns: number;
+	maxTurns?: number;
+	tokenBudget?: number;
 	timeoutMs?: number;
 	contextCompression?: "off" | "auto";
+	contextBudget?: ContextBudgetSpec;
+	toolOutputBudget?: ToolOutputBudgetSpec;
 	memoryPolicy?: "none" | "session" | "long-term";
 }
 

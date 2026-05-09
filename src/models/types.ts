@@ -59,6 +59,15 @@ export interface ModelUsage {
 	costUsd?: number;
 }
 
+export interface ModelTurnUsage {
+	turn: number;
+	purpose: ModelPurpose;
+	inputTokenEstimate: number;
+	messageCount: number;
+	usage: ModelUsage;
+	source: "provider" | "estimated";
+}
+
 export interface ModelTiming {
 	startedAt: number;
 	endedAt: number;

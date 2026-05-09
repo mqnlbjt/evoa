@@ -15,18 +15,18 @@ export function resolveCacheRetention(request: ModelRequest): CacheRetention {
 }
 
 export function anthropicCacheControl(retention: CacheRetention, baseURL?: string): AnthropicCacheControl | undefined {
-	if (retention === "none") return undefined;
+	if (retention === "none" || !isOfficialAnthropicBaseURL(baseURL)) return undefined;
 	return {
 		type: "ephemeral",
-		...(retention === "long" && isOfficialAnthropicBaseURL(baseURL) ? { ttl: "1h" as const } : {}),
+		...(retention === "long" ? { ttl: "1h" as const } : {}),
 	};
 }
 
 export function openAIPromptCacheParams(sessionId: string | undefined, retention: CacheRetention, baseURL?: string): OpenAIPromptCacheParams {
-	if (!sessionId || retention === "none") return {};
+	if (!sessionId || retention === "none" || !isOfficialOpenAIBaseURL(baseURL)) return {};
 	return {
 		prompt_cache_key: sessionId,
-		...(retention === "long" && isOfficialOpenAIBaseURL(baseURL) ? { prompt_cache_retention: "24h" as const } : {}),
+		...(retention === "long" ? { prompt_cache_retention: "24h" as const } : {}),
 	};
 }
 
