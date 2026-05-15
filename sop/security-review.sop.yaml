@@ -1,0 +1,92 @@
+# Security Review SOP
+# 对当前分支变更进行安全审查，检查常见漏洞和敏感信息泄露
+id: security-review
+version: "1.0.0"
+name: "Security Review"
+description: "扫描变更文件中的安全问题：密钥泄露、命令注入、SQL 注入、XSS 等"
+timeoutMs: 120000
+executionMode: stop_on_failure
+
+params:
+  type: object
+  properties:
+    targetBranch:
+      type: string
+      description: "对比的目标分支，默认 main"
+
+steps:
+  - id: get_diff
+    name: "获取变更文件列表"
+    description: "列出相对于目标分支的所有变更文件"
+    action:
+      type: tool
+      tool: bash
+      input:
+        command: "git diff --name-status {{params.targetBranch}}...HEAD"
+        description: "Get changed files with status"
+    verification:
+      method: regex
+      config:
+        pattern: "^[MADRT][0-9]*\\t"
+        multiline: true
+
+  - id: scan_secrets
+    name: "敏感信息扫描"
+    description: "检查是否包含密钥、token、密码、私钥等敏感信息"
+    dependsOn:
+      - get_diff
+    action:
+      type: tool
+      tool: grep
+      input:
+        pattern: "(password|secret|token|api[_\\s]?key|private[_\\s]?key|BEGIN\\s(?:RSA|DSA|EC|OPENSSH)\\sPRIVATE\\sKEY)\\s*[:=]\\s*[^\\s]"
+        glob: "*.{ts,js,tsx,jsx,py,go,yaml,yml,json,sh,toml,env}"
+        output_mode: content
+        "-n": true
+
+  - id: scan_command_injection
+    name: "命令注入检查"
+    description: "检查是否存在未转义的用户输入拼接到 shell/exec 命令"
+    dependsOn:
+      - get_diff
+    action:
+      type: tool
+      tool: grep
+      input:
+        pattern: "(exec|spawn|execSync|execFile|system|popen)\\s*\\(\\s*[^)]*\\+"
+        glob: "*.{ts,js,tsx,jsx,py,go}"
+        output_mode: content
+        "-n": true
+
+  - id: scan_sql_injection
+    name: "SQL 注入检查"
+    description: "检查是否存在字符串拼接构造 SQL 语句"
+    dependsOn:
+      - get_diff
+    action:
+      type: tool
+      tool: grep
+      input:
+        pattern: "(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\\s.*['\"]\\s*\\+"
+        glob: "*.{ts,js,py,go,java}"
+        output_mode: content
+        "-n": true
+
+  - id: scan_xss
+    name: "XSS 检查"
+    description: "检查是否存在 innerHTML/dangerouslySetInnerHTML 等风险"
+    dependsOn:
+      - get_diff
+    action:
+      type: tool
+      tool: grep
+      input:
+        pattern: "dangerouslySetInnerHTML|innerHTML\\s*=|document\\.write\\("
+        glob: "*.{tsx,jsx,ts,js}"
+        output_mode: content
+        "-n": true
+
+verification:
+  method: artifact_match
+  config:
+    minLength: 1

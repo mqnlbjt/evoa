@@ -1,0 +1,64 @@
+# Code Review SOP
+# 对当前分支变更进行代码审查
+id: code-review
+version: "1.0.0"
+name: "Code Review"
+description: "审查当前分支变更中的常见反模式和代码质量问题"
+timeoutMs: 60000
+executionMode: continue_on_failure
+
+params:
+  type: object
+  properties:
+    baseRef:
+      type: string
+      description: "对比的 git ref，默认 HEAD~1"
+
+steps:
+  - id: get_diff
+    name: "获取变更文件"
+    description: "列出相对于 baseRef 的变更文件"
+    action:
+      type: tool
+      tool: bash
+      input:
+        command: "git diff --name-only {{params.baseRef}} HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD"
+        description: "Get changed file list"
+    verification:
+      method: regex
+      config:
+        pattern: "^.+\\..+$"
+        multiline: true
+
+  - id: check_todos
+    name: "检查 TODO/FIXME"
+    description: "检查变更文件中是否有未解决的 TODO 或 FIXME"
+    dependsOn:
+      - get_diff
+    action:
+      type: tool
+      tool: grep
+      input:
+        pattern: "(TODO|FIXME|HACK|XXX)\\b"
+        glob: "*.{ts,js,tsx,jsx}"
+        output_mode: content
+        "-n": true
+
+  - id: check_console
+    name: "检查遗留 console.log"
+    description: "检查是否有遗留的 console.log 调试语句"
+    dependsOn:
+      - get_diff
+    action:
+      type: tool
+      tool: grep
+      input:
+        pattern: "console\\.(log|warn|debug)\\("
+        glob: "*.{ts,js,tsx,jsx}"
+        output_mode: content
+        "-n": true
+
+verification:
+  method: regex
+  config:
+    pattern: ".*"
