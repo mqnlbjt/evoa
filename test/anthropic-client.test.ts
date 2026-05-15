@@ -194,6 +194,160 @@ describe("AnthropicModelClient", () => {
 		expect(response.usage).toEqual({ inputTokens: 10, outputTokens: 4, reasoningTokens: 3, totalTokens: 14 });
 	});
 
+	it("does not send thinking params when reasoning is off", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({ agent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		const body = JSON.parse(String(capturedInit?.body));
+		expect(body).not.toMatchObject({ thinking: expect.anything() });
+		expect(body).not.toMatchObject({ output_config: expect.anything() });
+	});
+
+	it("sends thinking params when reasoning is enabled", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+		const thinkingAgent: AgentSpec = { ...agent, model: { ...agent.model, reasoningLevel: "high" } };
+
+		await client.complete({ agent: thinkingAgent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
+			thinking: { type: "adaptive" },
+			output_config: { effort: "high" },
+		});
+	});
+
+	it("parses thinking blocks when reasoning return content is enabled", async () => {
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async () => new Response(JSON.stringify({ content: [{ type: "thinking", thinking: "hidden chain" }, { type: "text", text: "visible" }] }), { status: 200 }),
+		});
+		const thinkingAgent: AgentSpec = { ...agent, model: { ...agent.model, reasoningLevel: "high", options: { reasoning: { returnContent: "always" } } } };
+
+		const response = await client.complete({ agent: thinkingAgent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(response).toMatchObject({ text: "visible", reasoning: "hidden chain" });
+	});
+
+	it("does not replay stored reasoning as Anthropic thinking history", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({
+			agent,
+			task,
+			turn: 2,
+			messages: [
+				{ role: "user", content: task.prompt },
+				{ role: "assistant", content: "visible", contentBlocks: [{ type: "reasoning", text: "hidden chain" }, { type: "text", text: "visible" }] },
+				{ role: "user", content: "continue" },
+			],
+		});
+
+		const body = JSON.parse(String(capturedInit?.body));
+		expect(body.messages[1]).toEqual({ role: "assistant", content: "visible" });
+	});
+
+	it("applies long TTL to system prompt even with default retention", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({
+			agent,
+			task,
+			turn: 1,
+			messages: [{ role: "user", content: task.prompt }],
+		});
+
+		const body = JSON.parse(String(capturedInit?.body));
+		expect(body).toMatchObject({
+			system: [{ text: "You are concise.", cache_control: { type: "ephemeral", ttl: "1h" } }],
+			messages: [{ role: "user", content: [{ type: "text", text: "Say hi", cache_control: { type: "ephemeral" } }] }],
+		});
+	});
+
+	it("adds cache_control to messages with cache:true flag", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({
+			agent,
+			task,
+			turn: 2,
+			messages: [
+				{ role: "user", content: "[Compacted conversation summary]\nDone so far.", cache: true },
+				{ role: "assistant", content: "working" },
+				{ role: "user", content: "Continue please." },
+			],
+		});
+
+		const body = JSON.parse(String(capturedInit?.body));
+		expect(body.messages).toMatchObject([
+			{ role: "user", content: [{ type: "text", text: "[Compacted conversation summary]\nDone so far.", cache_control: { type: "ephemeral" } }] },
+			{ role: "assistant", content: "working" },
+			{ role: "user", content: [{ type: "text", text: "Continue please.", cache_control: { type: "ephemeral" } }] },
+		]);
+	});
+
+	it("skips cache:true when cacheControl is disabled via none retention", async () => {
+		let capturedInit: RequestInit | undefined;
+		const client = new AnthropicModelClient({
+			apiKey: "key",
+			fetchFn: async (_input, init) => {
+				capturedInit = init;
+				return new Response(JSON.stringify({ content: [{ type: "text", text: "done" }] }), { status: 200 });
+			},
+		});
+
+		await client.complete({
+			agent: { ...agent, model: { ...agent.model, options: { cacheRetention: "none" } } },
+			task,
+			turn: 1,
+			messages: [
+				{ role: "user", content: "[Compacted conversation summary]\nDone so far.", cache: true },
+				{ role: "user", content: "Continue please." },
+			],
+		});
+
+		const body = JSON.parse(String(capturedInit?.body));
+		expect(body.system).toBe("You are concise.");
+		expect(body.messages).toMatchObject([
+			{ role: "user", content: "[Compacted conversation summary]\nDone so far." },
+			{ role: "user", content: "Continue please." },
+		]);
+	});
+
 	it("parses tool_use blocks into tool calls", async () => {
 		const client = new AnthropicModelClient({
 			apiKey: "key",
@@ -219,4 +373,129 @@ describe("AnthropicModelClient", () => {
 		expect(response.text).toBe("checking");
 		expect(response.toolCalls).toEqual([{ id: "toolu_1", name: "read_file", input: { path: "README.md" } }]);
 	});
+	
+		describe("streaming", () => {
+			it("parses SSE text deltas and calls onTextDelta", async () => {
+				const deltas: string[] = [];
+				const fullTexts: string[] = [];
+				const client = new AnthropicModelClient({
+					apiKey: "key",
+					fetchFn: async () => sseResponse(streamingSSEEvents()),
+				});
+
+				const response = await client.complete({
+					agent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+					streamCallbacks: {
+						onTextDelta: (delta, fullText) => {
+							deltas.push(delta);
+							fullTexts.push(fullText);
+						},
+					},
+				});
+
+				expect(response.text).toBe("hello world");
+				expect(deltas).toEqual(["hello", " world"]);
+				expect(fullTexts).toEqual(["hello", "hello world"]);
+				expect(response.usage).toEqual({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+				expect(response.metadata).toMatchObject({ id: "msg_1", stopReason: "end_turn" });
+			});
+
+			it("parses tool_use blocks in streaming", async () => {
+				const client = new AnthropicModelClient({
+					apiKey: "key",
+					fetchFn: async () => sseResponse(streamingToolUseEvents()),
+				});
+
+				const response = await client.complete({
+					agent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+				});
+
+				expect(response.text).toBe("checking");
+				expect(response.toolCalls).toEqual([{ id: "toolu_1", name: "read_file", input: { path: "README.md" } }]);
+			});
+
+			it("parses thinking deltas in streaming", async () => {
+				const deltas: string[] = [];
+				const client = new AnthropicModelClient({
+					apiKey: "key",
+					fetchFn: async () => sseResponse(streamingThinkingEvents()),
+				});
+				const thinkingAgent: AgentSpec = { ...agent, model: { ...agent.model, reasoningLevel: "high", options: { reasoning: { returnContent: "always" } } } };
+
+				const response = await client.complete({
+					agent: thinkingAgent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+					streamCallbacks: { onReasoningDelta: (delta) => deltas.push(delta) },
+				});
+
+				expect(response.reasoning).toBe("hidden chain");
+				expect(response.text).toBe("visible");
+				expect(deltas).toEqual(["hidden ", "chain"]);
+			});
+		});
 });
+
+function sseResponse(events: string[]): Response {
+	const body = new ReadableStream({
+		start(controller) {
+			const encoder = new TextEncoder();
+			for (const event of events) {
+				controller.enqueue(encoder.encode(event));
+			}
+			controller.close();
+		},
+	});
+	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function streamingSSEEvents(): string[] {
+	return [
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3\",\"usage\":{\"input_tokens\":10}}}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" world\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+	];
+}
+
+function streamingToolUseEvents(): string[] {
+	return [
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3\",\"usage\":{\"input_tokens\":10}}}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"checking\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":8}}\n\n",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+	];
+}
+
+function streamingThinkingEvents(): string[] {
+	return [
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3\",\"usage\":{\"input_tokens\":10}}}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hidden \"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"chain\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"visible\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":8}}\n\n",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+	];
+}

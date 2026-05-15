@@ -126,8 +126,41 @@ function parseModelSpec(value: unknown, prefix: string, diagnostics: string[]): 
 	const provider = requiredString(value.provider, `${prefix}.provider`, diagnostics);
 	const model = requiredString(value.model, `${prefix}.model`, diagnostics);
 	const reasoningLevel = reasoningLevelValue(value.reasoningLevel, `${prefix}.reasoningLevel`, diagnostics);
+	const options = parseModelOptions(value.options, `${prefix}.options`, diagnostics);
 	if (!provider || !model) return undefined;
-	return { provider, model, ...(reasoningLevel ? { reasoningLevel } : {}), ...(isRecord(value.options) ? { options: { ...value.options } } : {}) };
+	return { provider, model, ...(reasoningLevel ? { reasoningLevel } : {}), ...(options ? { options } : {}) };
+}
+
+function parseModelOptions(value: unknown, prefix: string, diagnostics: string[]): ModelSpec["options"] | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) {
+		diagnostics.push(`${prefix} must be an object`);
+		return undefined;
+	}
+	if (value.reasoning !== undefined) validateReasoningOptions(value.reasoning, `${prefix}.reasoning`, diagnostics);
+	return { ...value };
+}
+
+function validateReasoningOptions(value: unknown, prefix: string, diagnostics: string[]): void {
+	if (!isRecord(value)) {
+		diagnostics.push(`${prefix} must be an object`);
+		return;
+	}
+	if (value.mode !== undefined && !["auto", "off", "effort", "provider", "adaptive"].includes(String(value.mode))) diagnostics.push(`${prefix}.mode must be auto, off, effort, provider, or adaptive`);
+	if (value.returnContent !== undefined && !["never", "needed", "always"].includes(String(value.returnContent))) diagnostics.push(`${prefix}.returnContent must be never, needed, or always`);
+	if (value.sendHistory !== undefined && !["never", "needed", "always"].includes(String(value.sendHistory))) diagnostics.push(`${prefix}.sendHistory must be never, needed, or always`);
+	if (value.provider !== undefined) validateReasoningProviderOptions(value.provider, `${prefix}.provider`, diagnostics);
+}
+
+function validateReasoningProviderOptions(value: unknown, prefix: string, diagnostics: string[]): void {
+	if (!isRecord(value)) {
+		diagnostics.push(`${prefix} must be an object`);
+		return;
+	}
+	if (value.style !== undefined && !["openai-responses", "deepseek", "anthropic", "chat-compatible"].includes(String(value.style))) diagnostics.push(`${prefix}.style must be openai-responses, deepseek, anthropic, or chat-compatible`);
+	if (value.requestField !== undefined && !["reasoning", "reasoning_effort", "extra_body.reasoning_effort", "extra_body.thinking"].includes(String(value.requestField))) diagnostics.push(`${prefix}.requestField must be reasoning, reasoning_effort, extra_body.reasoning_effort, or extra_body.thinking`);
+	if (value.effort !== undefined && (typeof value.effort !== "string" || value.effort.length === 0)) diagnostics.push(`${prefix}.effort must be a non-empty string`);
+	if (value.thinkingType !== undefined && !["enabled", "adaptive"].includes(String(value.thinkingType))) diagnostics.push(`${prefix}.thinkingType must be enabled or adaptive`);
 }
 
 function parseModelRoutes(value: unknown, aliases: Record<string, ModelSpec> | undefined, diagnostics: string[]): ModelRoutingSpec["routes"] | undefined {

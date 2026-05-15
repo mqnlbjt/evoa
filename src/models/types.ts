@@ -13,7 +13,7 @@ export interface ModelRoutingHints {
 
 export type ModelContentBlock =
 	| { type: "text"; text: string }
-	| { type: "reasoning"; text: string }
+	| { type: "reasoning"; text: string; provider?: string; format?: "openai-reasoning-content" | "anthropic-thinking" | "summary" | "unknown"; metadata?: Record<string, unknown> }
 	| { type: "tool_call"; id: string; name: string; input?: unknown }
 	| { type: "tool_result"; toolCallId: string; toolName?: string; content: string; isError?: boolean };
 
@@ -23,6 +23,7 @@ export interface ModelMessage {
 	contentBlocks?: ModelContentBlock[];
 	toolCallId?: string;
 	toolName?: string;
+	cache?: boolean;
 }
 
 export interface ModelToolDefinition {
@@ -47,6 +48,13 @@ export interface ModelRequest {
 	sessionId?: string;
 	cacheRetention?: CacheRetention;
 	tools?: ModelToolDefinition[];
+	stream?: boolean;
+	streamCallbacks?: StreamCallbacks;
+}
+
+export interface StreamCallbacks {
+	onTextDelta?: (delta: string, fullText: string) => void;
+	onReasoningDelta?: (delta: string, fullReasoning: string) => void;
 }
 
 export interface ModelUsage {

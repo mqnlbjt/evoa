@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ModelClient, ModelRequest } from "../src/models/types.js";
 import { AgentRuntime } from "../src/runtime/agent-runtime.js";
+import { resolveContextBudget } from "../src/runtime/budget.js";
+import { buildModelContextView } from "../src/runtime/context-view.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { createAgentSession, type SessionEntry } from "../src/runtime/session.js";
 import type { AgentSpec, TaskSpec } from "../src/specs.js";
@@ -25,6 +27,23 @@ const baseAgent: AgentSpec = {
 };
 
 describe("context compaction", () => {
+	it("redacts reasoning blocks from context previews", () => {
+		const session = createAgentSession({
+			id: "session",
+			agent: baseAgent,
+			task,
+			messages: [
+				{ role: "user", content: "question" },
+				{ role: "assistant", content: "visible", contentBlocks: [{ type: "reasoning", text: "hidden chain" }, { type: "text", text: "visible" }] },
+			],
+		});
+
+		const view = buildModelContextView(session, { budget: resolveContextBudget(baseAgent) });
+
+		expect(JSON.stringify(view.messagesPreview)).toContain("[reasoning omitted: 12 chars]");
+		expect(JSON.stringify(view.messagesPreview)).not.toContain("hidden chain");
+	});
+
 	it("does not compact when contextCompression is off", async () => {
 		const requests: ModelRequest[] = [];
 		const runtime = new AgentRuntime({ modelClient: recordingClient(requests), createId: ids(), now: () => 1 });

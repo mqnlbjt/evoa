@@ -3,11 +3,34 @@ import type { ModelPurpose } from "./models/types.js";
 export type AgentSpecKind = "baseline" | "candidate";
 export type TaskType = "coding" | "tool" | "general" | "business";
 
+export type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningRetentionPolicy = "never" | "needed" | "always";
+export type ReasoningProviderStyle = "openai-responses" | "deepseek" | "anthropic" | "chat-compatible";
+export type ReasoningRequestField = "reasoning" | "reasoning_effort" | "extra_body.reasoning_effort" | "extra_body.thinking";
+
+export interface ReasoningProviderOptions {
+	style?: ReasoningProviderStyle;
+	requestField?: ReasoningRequestField;
+	effort?: string;
+	thinkingType?: "enabled" | "adaptive";
+}
+
+export interface ReasoningOptions {
+	mode?: "auto" | "off" | "effort" | "provider" | "adaptive";
+	returnContent?: ReasoningRetentionPolicy;
+	sendHistory?: ReasoningRetentionPolicy;
+	provider?: ReasoningProviderOptions;
+}
+
+export interface ModelOptions extends Record<string, unknown> {
+	reasoning?: ReasoningOptions;
+}
+
 export interface ModelSpec {
 	provider: string;
 	model: string;
-	reasoningLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-	options?: Record<string, unknown>;
+	reasoningLevel?: ReasoningLevel;
+	options?: ModelOptions;
 }
 
 export interface ModelRoutingSpec {
@@ -74,6 +97,10 @@ export interface ToolOutputBudgetSpec {
 	perTool?: Record<string, Omit<ToolOutputBudgetSpec, "perTool">>;
 }
 
+export interface AutoContinueSpec {
+	maxFollowUps?: number;
+}
+
 export interface RuntimePolicySpec {
 	maxTurns?: number;
 	tokenBudget?: number;
@@ -82,6 +109,14 @@ export interface RuntimePolicySpec {
 	contextBudget?: ContextBudgetSpec;
 	toolOutputBudget?: ToolOutputBudgetSpec;
 	memoryPolicy?: "none" | "session" | "long-term";
+	autoContinue?: boolean | AutoContinueSpec;
+}
+
+export interface SkillsSpec {
+	enabled?: boolean;
+	sopDir?: string;
+	skillBankPath?: string;
+	autoImportDir?: string;
 }
 
 export interface AgentSpec {
@@ -94,6 +129,7 @@ export interface AgentSpec {
 	prompts: PromptSpec;
 	tools: ToolPolicySpec;
 	runtime: RuntimePolicySpec;
+	skills?: SkillsSpec;
 	metadata?: Record<string, unknown>;
 }
 

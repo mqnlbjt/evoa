@@ -187,6 +187,7 @@ describe("AgentRuntime", () => {
 
 		await new AgentRuntime({ modelClient, toolRegistry: registry, createId: createIds(), now: () => 1 }).runTask(agent, task);
 
+		expect(seenRequests[0]).toMatchObject({ stream: true });
 		expect(seenRequests[1]).toMatchObject({
 			messages: expect.arrayContaining([
 				{

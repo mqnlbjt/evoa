@@ -1,5 +1,6 @@
 import { anthropicCacheControl, resolveCacheRetention, type AnthropicCacheControl } from "./cache.js";
-import type { ModelClient, ModelContentBlock, ModelMessage, ModelRequest, ModelResponse, ModelToolCall, ModelToolDefinition, ModelUsage } from "./types.js";
+import { resolveReasoningPolicy, shouldReturnReasoning } from "./reasoning.js";
+import type { CacheRetention, ModelClient, ModelContentBlock, ModelMessage, ModelRequest, ModelResponse, ModelToolCall, ModelToolDefinition, ModelUsage } from "./types.js";
 
 export interface AnthropicModelClientOptions {
 	apiKey?: string;
@@ -13,6 +14,8 @@ export interface AnthropicModelClientOptions {
 interface AnthropicContentBlock {
 	type: string;
 	text?: string;
+	thinking?: string;
+	signature?: string;
 	id?: string;
 	name?: string;
 	input?: unknown;
@@ -34,6 +37,8 @@ export class AnthropicModelClient implements ModelClient {
 	}
 
 	async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+		if (request.stream) return this.streamComplete(request, signal);
+
 		const apiKey = this.options.apiKey ?? process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY;
 		if (!apiKey) {
 			throw new Error("Anthropic API key is required. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or pass apiKey.");
@@ -61,9 +66,12 @@ export class AnthropicModelClient implements ModelClient {
 
 		const data = body as AnthropicMessageResponse;
 		const toolCalls = parseToolCalls(data.content ?? []);
+		const policy = resolveReasoningPolicy(request.agent.model, "anthropic");
+		const reasoning = shouldReturnReasoning(policy, toolCalls) ? parseThinking(data.content ?? []) : undefined;
 		const usage = normalizeUsage(data.usage);
 		return {
 			text: data.content?.filter((block) => block.type === "text").map((block) => block.text ?? "").join("") ?? "",
+			...(reasoning ? { reasoning } : {}),
 			...(toolCalls.length > 0 ? { toolCalls } : {}),
 			...(data.id ? { requestId: data.id } : {}),
 			...(usage ? { usage } : {}),
@@ -75,16 +83,161 @@ export class AnthropicModelClient implements ModelClient {
 			},
 		};
 	}
+
+	private async streamComplete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+		const apiKey = this.options.apiKey ?? process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY;
+		if (!apiKey) {
+			throw new Error("Anthropic API key is required. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or pass apiKey.");
+		}
+
+		const maxTokens = this.options.maxTokens ?? numberOption(request.agent.model.options?.maxTokens) ?? 8192;
+		const requestBody = { ...buildBody(request, maxTokens, this.options.baseURL), stream: true };
+		const init: RequestInit = {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-api-key": apiKey,
+				"anthropic-version": this.options.anthropicVersion ?? "2023-06-01",
+				...this.options.headers,
+			},
+			body: JSON.stringify(requestBody),
+			...(signal ? { signal } : {}),
+		};
+
+		const response = await this.fetchFn(`${normalizeBaseURL(this.options.baseURL)}/messages`, init);
+		if (!response.ok) {
+			const errorBody = await response.text();
+			let message = `Anthropic streaming request failed with status ${response.status}`;
+			try {
+				const parsed = JSON.parse(errorBody);
+				if (parsed.error?.message) message = parsed.error.message;
+			} catch { /* use default message */ }
+			throw new Error(message);
+		}
+		if (!response.body) throw new Error("Anthropic streaming response has no body");
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+		let requestId = "";
+		let model = "";
+		let stopReason = "";
+		let inputTokens = 0;
+		let outputTokens = 0;
+		let fullText = "";
+		let fullReasoning = "";
+		const toolUseBlocks = new Map<number, { id: string; name: string; json: string }>();
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const events = splitSSEEvents(buffer);
+				buffer = events.remainder;
+				for (const sseEvent of events.complete) {
+					const parsed = parseSSEData(sseEvent);
+					if (!parsed) continue;
+					const data = parsed as Record<string, unknown>;
+					const type = typeof data.type === "string" ? data.type : "";
+					switch (type) {
+						case "message_start": {
+							const msg = (data.message ?? {}) as Record<string, unknown>;
+							requestId = typeof msg.id === "string" ? msg.id : "";
+							model = typeof msg.model === "string" ? msg.model : "";
+							const msgUsage = (msg.usage ?? {}) as Record<string, unknown>;
+							inputTokens = typeof msgUsage.input_tokens === "number" ? msgUsage.input_tokens : 0;
+							break;
+						}
+						case "content_block_start": {
+							const block = (data.content_block ?? {}) as Record<string, unknown>;
+							if (block.type === "tool_use") {
+								const idx = typeof data.index === "number" ? data.index : 0;
+								toolUseBlocks.set(idx, { id: typeof block.id === "string" ? block.id : "", name: typeof block.name === "string" ? block.name : "", json: "" });
+							}
+							break;
+						}
+						case "content_block_delta": {
+							const delta = (data.delta ?? {}) as Record<string, unknown>;
+							const deltaType = typeof delta.type === "string" ? delta.type : "";
+							if (deltaType === "text_delta" && typeof delta.text === "string") {
+								fullText += delta.text;
+								request.streamCallbacks?.onTextDelta?.(delta.text, fullText);
+							} else if (deltaType === "thinking_delta" && typeof delta.thinking === "string") {
+								fullReasoning += delta.thinking;
+								request.streamCallbacks?.onReasoningDelta?.(delta.thinking, fullReasoning);
+							} else if (deltaType === "input_json_delta" && typeof delta.partial_json === "string") {
+								const idx = typeof data.index === "number" ? data.index : 0;
+								const block = toolUseBlocks.get(idx);
+								if (block) block.json += delta.partial_json;
+							}
+							break;
+						}
+						case "message_delta": {
+							const delta = (data.delta ?? {}) as Record<string, unknown>;
+							stopReason = typeof delta.stop_reason === "string" ? delta.stop_reason : "";
+							const msgUsage = (data.usage ?? {}) as Record<string, unknown>;
+							outputTokens = typeof msgUsage.output_tokens === "number" ? msgUsage.output_tokens : 0;
+							break;
+						}
+						case "error": {
+							const err = (data.error ?? {}) as Record<string, unknown>;
+							throw new Error(typeof err.message === "string" ? err.message : "Anthropic streaming error");
+						}
+					}
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+
+		const toolCalls: ModelToolCall[] = [...toolUseBlocks.values()].map((block) => ({
+			id: block.id,
+			name: block.name,
+			input: parseToolCallInput(block.json),
+		}));
+
+		const policy = resolveReasoningPolicy(request.agent.model, "anthropic");
+		const reasoning = shouldReturnReasoning(policy, toolCalls) && fullReasoning ? fullReasoning : undefined;
+		const totalTokens = inputTokens + outputTokens;
+		const usage: ModelUsage = { inputTokens, outputTokens, totalTokens };
+		return {
+			text: fullText,
+			...(reasoning ? { reasoning } : {}),
+			...(toolCalls.length > 0 ? { toolCalls } : {}),
+			...(requestId ? { requestId } : {}),
+			usage,
+			metadata: {
+				...(requestId ? { id: requestId } : {}),
+				...(model ? { model } : {}),
+				...(stopReason ? { stopReason } : {}),
+				usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+			},
+		};
+	}
 }
 
 function buildBody(request: ModelRequest, maxTokens: number, baseURL?: string): Record<string, unknown> {
-	const cacheControl = anthropicCacheControl(resolveCacheRetention(request), baseURL);
+	const messageRetention = resolveCacheRetention(request);
+	const systemRetention: CacheRetention = messageRetention === "none" ? "none" : "long";
+	const systemCacheControl = anthropicCacheControl(systemRetention, baseURL);
+	const messageCacheControl = anthropicCacheControl(messageRetention, baseURL);
 	return {
 		model: request.agent.model.model,
 		max_tokens: maxTokens,
-		system: anthropicSystem(request.agent.prompts.system, cacheControl),
-		messages: toAnthropicMessages(request.messages, cacheControl),
-		...(request.tools?.length ? { tools: request.tools.map((tool, index) => toAnthropicTool(tool, index === request.tools!.length - 1 ? cacheControl : undefined)) } : {}),
+		system: anthropicSystem(request.agent.prompts.system, systemCacheControl),
+		messages: toAnthropicMessages(request.messages, messageCacheControl),
+		...anthropicThinkingParams(request),
+		...(request.tools?.length ? { tools: request.tools.map((tool, index) => toAnthropicTool(tool, index === request.tools!.length - 1 ? messageCacheControl : undefined)) } : {}),
+	};
+}
+
+function anthropicThinkingParams(request: ModelRequest): Record<string, unknown> {
+	const policy = resolveReasoningPolicy(request.agent.model, "anthropic");
+	if (!policy.enabled) return {};
+	return {
+		thinking: { type: policy.thinkingType },
+		output_config: { effort: policy.effort },
 	};
 }
 
@@ -95,8 +248,15 @@ function anthropicSystem(system: string, cacheControl: AnthropicCacheControl | u
 
 function toAnthropicMessages(messages: ModelMessage[], cacheControl: AnthropicCacheControl | undefined): Record<string, unknown>[] {
 	const filtered = messages.filter((message) => message.role !== "system");
-	const cacheIndex = cacheControl ? lastUserMessageIndex(filtered) : -1;
-	return filtered.map((message, index) => toAnthropicMessage(message, index === cacheIndex ? cacheControl : undefined));
+	const cacheIndices = new Set<number>();
+	if (cacheControl) {
+		const lastUserIdx = lastUserMessageIndex(filtered);
+		if (lastUserIdx >= 0) cacheIndices.add(lastUserIdx);
+		for (let i = 0; i < filtered.length; i++) {
+			if (filtered[i]?.cache) cacheIndices.add(i);
+		}
+	}
+	return filtered.map((message, index) => toAnthropicMessage(message, cacheIndices.has(index) ? cacheControl : undefined));
 }
 
 function lastUserMessageIndex(messages: ModelMessage[]): number {
@@ -147,6 +307,14 @@ function toAnthropicTool(tool: ModelToolDefinition, cacheControl?: AnthropicCach
 	};
 }
 
+function parseThinking(blocks: AnthropicContentBlock[]): string | undefined {
+	const parts = blocks
+		.filter((block) => block.type === "thinking")
+		.map((block) => block.thinking ?? block.text ?? "")
+		.filter((text) => text.length > 0);
+	return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
 function parseToolCalls(blocks: AnthropicContentBlock[]): ModelToolCall[] {
 	return blocks
 		.filter((block) => block.type === "tool_use" && block.id && block.name)
@@ -194,4 +362,32 @@ function numberOption(value: unknown): number | undefined {
 
 function normalizeBaseURL(baseURL = "https://api.anthropic.com/v1"): string {
 	return baseURL.replace(/\/+$/, "");
+}
+
+function splitSSEEvents(buffer: string): { complete: string[]; remainder: string } {
+	const parts = buffer.split("\n\n");
+	const remainder = parts.pop() ?? "";
+	return { complete: parts, remainder };
+}
+
+function parseSSEData(raw: string): Record<string, unknown> | undefined {
+	const lines = raw.split("\n");
+	const dataLines: string[] = [];
+	for (const line of lines) {
+		if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+	}
+	if (dataLines.length === 0) return undefined;
+	try {
+		return JSON.parse(dataLines.join("\n"));
+	} catch {
+		return undefined;
+	}
+}
+
+function parseToolCallInput(json: string): unknown {
+	try {
+		return JSON.parse(json);
+	} catch {
+		return { raw: json };
+	}
 }

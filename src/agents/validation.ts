@@ -69,6 +69,35 @@ function validateModelSpec(value: unknown, path: string): asserts value is Model
 		throw new Error(`${path}.reasoningLevel must be off, minimal, low, medium, high, or xhigh`);
 	}
 	if (value.options !== undefined && !isRecord(value.options)) throw new Error(`${path}.options must be an object`);
+	if (isRecord(value.options) && value.options.reasoning !== undefined) validateReasoningOptions(value.options.reasoning, `${path}.options.reasoning`);
+}
+
+function validateReasoningOptions(value: unknown, path: string): void {
+	if (!isRecord(value)) throw new Error(`${path} must be an object`);
+	if (value.mode !== undefined && !["auto", "off", "effort", "provider", "adaptive"].includes(String(value.mode))) {
+		throw new Error(`${path}.mode must be auto, off, effort, provider, or adaptive`);
+	}
+	if (value.returnContent !== undefined && !["never", "needed", "always"].includes(String(value.returnContent))) {
+		throw new Error(`${path}.returnContent must be never, needed, or always`);
+	}
+	if (value.sendHistory !== undefined && !["never", "needed", "always"].includes(String(value.sendHistory))) {
+		throw new Error(`${path}.sendHistory must be never, needed, or always`);
+	}
+	if (value.provider !== undefined) validateReasoningProviderOptions(value.provider, `${path}.provider`);
+}
+
+function validateReasoningProviderOptions(value: unknown, path: string): void {
+	if (!isRecord(value)) throw new Error(`${path} must be an object`);
+	if (value.style !== undefined && !["openai-responses", "deepseek", "anthropic", "chat-compatible"].includes(String(value.style))) {
+		throw new Error(`${path}.style must be openai-responses, deepseek, anthropic, or chat-compatible`);
+	}
+	if (value.requestField !== undefined && !["reasoning", "reasoning_effort", "extra_body.reasoning_effort", "extra_body.thinking"].includes(String(value.requestField))) {
+		throw new Error(`${path}.requestField must be reasoning, reasoning_effort, extra_body.reasoning_effort, or extra_body.thinking`);
+	}
+	if (value.effort !== undefined) requireString(value.effort, `${path}.effort`);
+	if (value.thinkingType !== undefined && !["enabled", "adaptive"].includes(String(value.thinkingType))) {
+		throw new Error(`${path}.thinkingType must be enabled or adaptive`);
+	}
 }
 
 function validateModelRoutingSpec(value: unknown): asserts value is ModelRoutingSpec {

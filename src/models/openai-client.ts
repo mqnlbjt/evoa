@@ -1,5 +1,6 @@
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses.js";
 import { openAIPromptCacheParams, resolveCacheRetention } from "./cache.js";
+import { resolveReasoningPolicy, shouldReturnReasoning, shouldSendReasoningHistory } from "./reasoning.js";
 import type { ModelClient, ModelContentBlock, ModelRequest, ModelResponse, ModelToolCall, ModelToolDefinition, ModelUsage } from "./types.js";
 
 export interface OpenAIModelClientOptions {
@@ -49,6 +50,34 @@ interface OpenAIChatChoiceLike {
 	message?: OpenAIChatMessageLike;
 }
 
+interface OpenAIChatStreamChoiceLike {
+	delta?: {
+		content?: string | null;
+		reasoning_content?: string | null;
+		tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> | null;
+	};
+}
+
+interface OpenAIStreamEventLike {
+	type?: string;
+	delta?: string;
+	item?: OpenAIOutputItemLike;
+	response?: OpenAIResponseLike;
+	choices?: OpenAIChatStreamChoiceLike[];
+	usage?: unknown;
+	_request_id?: string | null;
+}
+
+interface OpenAIStreamState {
+	fullText: string;
+	reasoningParts: string[];
+	toolCalls: Array<{ id: string; name: string; json: string }>;
+	chatToolCalls: Map<number, { id: string; name: string; json: string }>;
+	usage?: ModelUsage;
+	requestId: string;
+	pendingCall?: { id: string; name: string; json: string };
+}
+
 interface OpenAIErrorResponseLike {
 	error?: { message?: string };
 }
@@ -61,9 +90,12 @@ export interface OpenAIResponseLike {
 	_request_id?: string | null | undefined;
 }
 
-type ResponseCreateParamsWithPromptCache = ResponseCreateParamsNonStreaming & {
+type ResponseCreateParamsWithPromptCache = Omit<ResponseCreateParamsNonStreaming, "reasoning"> & {
 	prompt_cache_key?: string;
 	prompt_cache_retention?: "24h";
+	reasoning?: { effort: string };
+	reasoning_effort?: string;
+	extra_body?: Record<string, unknown>;
 };
 
 export interface OpenAIResponsesClient {
@@ -83,10 +115,13 @@ export class OpenAIModelClient implements ModelClient {
 	}
 
 	async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+		if (request.stream) return this.streamComplete(request, signal);
+
 		const params = this.buildParams(request);
 		const response = this.options.client ? await this.options.client.responses.create(params, signal ? { signal } : undefined) : await this.createResponse(params, signal);
 		const toolCalls = parseToolCalls(response);
-		const reasoning = parseReasoning(response);
+		const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
+		const reasoning = shouldReturnReasoning(policy, toolCalls) ? parseReasoning(response) : undefined;
 		const usage = normalizeUsage(response.usage);
 		const finishReason = response.choices?.[0]?.message ? (response.choices[0] as Record<string, unknown>).finish_reason as string | undefined : undefined;
 		return {
@@ -101,6 +136,93 @@ export class OpenAIModelClient implements ModelClient {
 				...(finishReason ? { finishReason } : {}),
 			},
 		};
+	}
+
+	private async streamComplete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+		if (this.options.client) return this.streamCompleteSDK(request, signal);
+		return this.streamCompleteFetch(request, signal);
+	}
+
+	private async streamCompleteSDK(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+		const params = { ...this.buildParams(request), stream: true as const };
+		const result = await (this.options.client!.responses.create as unknown as (p: Record<string, unknown>, o?: { signal?: AbortSignal }) => Promise<Record<string, unknown> | AsyncIterable<Record<string, unknown>>>)(params, signal ? { signal } : undefined);
+
+		if (typeof result !== "object" || result === null || !(Symbol.asyncIterator in result)) {
+			const response = result as OpenAIResponseLike;
+			const toolCalls = parseToolCalls(response);
+			const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
+			const reasoning = shouldReturnReasoning(policy, toolCalls) ? parseReasoning(response) : undefined;
+			return {
+				text: parseResponseText(response),
+				...(reasoning ? { reasoning } : {}),
+				...(toolCalls.length > 0 ? { toolCalls } : {}),
+				...(response._request_id ? { requestId: response._request_id } : {}),
+			};
+		}
+
+		const stream = result as AsyncIterable<Record<string, unknown>>;
+		const state = createOpenAIStreamState();
+		for await (const raw of stream) {
+			processOpenAIStreamEvent(state, raw as OpenAIStreamEventLike, request);
+		}
+		return streamResponseFromState(state, request);
+	}
+
+	private async streamCompleteFetch(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+		const apiKey = this.options.apiKey ?? process.env.OPENAI_API_KEY;
+		if (!apiKey) throw new Error("OpenAI API key is required. Set OPENAI_API_KEY or pass apiKey.");
+
+		const params = { ...this.buildParams(request), stream: true };
+		const response = await this.fetchFn(`${normalizeBaseURL(this.options.baseURL)}/responses`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				authorization: `Bearer ${apiKey}`,
+				...this.options.defaultHeaders,
+			},
+			body: JSON.stringify(params),
+			...(signal ? { signal } : {}),
+		});
+
+		if (!response.ok) {
+			const errorBody = await response.text();
+			let message = `OpenAI streaming request failed with status ${response.status}`;
+			try {
+				const parsed = JSON.parse(errorBody);
+				if (parsed.error?.message) message = parsed.error.message;
+			} catch { /* use default message */ }
+			throw new Error(message);
+		}
+		if (!response.body) throw new Error("OpenAI streaming response has no body");
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+		const state = createOpenAIStreamState();
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split("\n");
+				buffer = lines.pop() ?? "";
+
+				for (const line of lines) {
+					const trimmed = line.trim();
+					if (!trimmed.startsWith("data: ")) continue;
+					const data = trimmed.slice(6);
+					if (data === "[DONE]") continue;
+					let event: OpenAIStreamEventLike;
+					try { event = JSON.parse(data) as OpenAIStreamEventLike; } catch { continue; }
+					processOpenAIStreamEvent(state, event, request);
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+
+		return streamResponseFromState(state, request);
 	}
 
 	private async createResponse(params: ResponseCreateParamsWithPromptCache, signal?: AbortSignal): Promise<OpenAIResponseLike> {
@@ -136,9 +258,7 @@ export class OpenAIModelClient implements ModelClient {
 		if (this.options.maxOutputTokens !== undefined) {
 			params.max_output_tokens = this.options.maxOutputTokens;
 		}
-		if (request.agent.model.reasoningLevel && request.agent.model.reasoningLevel !== "off") {
-			params.reasoning = { effort: request.agent.model.reasoningLevel };
-		}
+		applyOpenAIReasoningParams(params, request);
 		if (request.tools?.length) {
 			params.tools = request.tools.map(toOpenAITool) as NonNullable<ResponseCreateParamsNonStreaming["tools"]>;
 		}
@@ -149,6 +269,7 @@ export class OpenAIModelClient implements ModelClient {
 
 function buildInput(request: ModelRequest): NonNullable<ResponseCreateParamsNonStreaming["input"]> {
 	const input: unknown[] = [];
+	const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
 	for (const message of request.messages.filter((message) => message.role !== "system")) {
 		if (message.role === "tool") {
 			const result = message.contentBlocks?.find((block): block is Extract<ModelContentBlock, { type: "tool_result" }> => block.type === "tool_result");
@@ -163,7 +284,7 @@ function buildInput(request: ModelRequest): NonNullable<ResponseCreateParamsNonS
 		const toolCalls = message.contentBlocks?.filter((block): block is Extract<ModelContentBlock, { type: "tool_call" }> => block.type === "tool_call") ?? [];
 		const reasoning = message.contentBlocks?.find((block): block is Extract<ModelContentBlock, { type: "reasoning" }> => block.type === "reasoning");
 		if (message.role === "assistant" && (toolCalls.length > 0 || reasoning)) {
-			input.push(...assistantHistoryItem(message, reasoning, toolCalls));
+			input.push(...assistantHistoryItem(message, reasoning, toolCalls, shouldSendReasoningHistory(policy, toolCalls)));
 			continue;
 		}
 		input.push({ role: message.role, content: message.content });
@@ -171,13 +292,31 @@ function buildInput(request: ModelRequest): NonNullable<ResponseCreateParamsNonS
 	return input as NonNullable<ResponseCreateParamsNonStreaming["input"]>;
 }
 
-function assistantHistoryItem(message: { content: string }, reasoning: Extract<ModelContentBlock, { type: "reasoning" }> | undefined, toolCalls: Array<Extract<ModelContentBlock, { type: "tool_call" }>>): unknown[] {
+function assistantHistoryItem(message: { content: string }, reasoning: Extract<ModelContentBlock, { type: "reasoning" }> | undefined, toolCalls: Array<Extract<ModelContentBlock, { type: "tool_call" }>>, includeReasoning: boolean): unknown[] {
 	const items: unknown[] = [];
-	if (message.content || reasoning) {
-		items.push({ role: "assistant", content: message.content, ...(reasoning ? { reasoning_content: reasoning.text } : {}) });
+	if (message.content || (reasoning && includeReasoning)) {
+		items.push({ role: "assistant", content: message.content, ...(reasoning && includeReasoning ? { reasoning_content: reasoning.text } : {}) });
 	}
 	items.push(...toolCalls.map((call) => ({ type: "function_call", call_id: call.id, name: call.name, arguments: JSON.stringify(call.input ?? {}) })));
 	return items;
+}
+
+function applyOpenAIReasoningParams(params: ResponseCreateParamsWithPromptCache, request: ModelRequest): void {
+	const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
+	if (!policy.enabled) return;
+	if (policy.requestField === "reasoning_effort") {
+		params.reasoning_effort = policy.effort;
+		return;
+	}
+	if (policy.requestField === "extra_body.reasoning_effort") {
+		params.extra_body = { ...params.extra_body, reasoning_effort: policy.effort };
+		return;
+	}
+	if (policy.requestField === "extra_body.thinking") {
+		params.extra_body = { ...params.extra_body, thinking: { type: policy.thinkingType }, reasoning_effort: policy.effort };
+		return;
+	}
+	params.reasoning = { effort: policy.effort };
 }
 
 function toOpenAITool(tool: ModelToolDefinition): unknown {
@@ -234,6 +373,107 @@ function parseReasoning(response: OpenAIResponseLike): string | undefined {
 
 function parseResponseText(response: OpenAIResponseLike): string {
 	return nonEmptyString(response.output_text) ?? parseChoiceText(response.choices?.[0]?.message?.content) ?? parseOutputText(response);
+}
+
+function createOpenAIStreamState(): OpenAIStreamState {
+	return { fullText: "", reasoningParts: [], toolCalls: [], chatToolCalls: new Map(), requestId: "" };
+}
+
+function processOpenAIStreamEvent(state: OpenAIStreamState, event: OpenAIStreamEventLike, request: ModelRequest): void {
+	processChatCompatibleStreamEvent(state, event, request);
+	const eventType = typeof event.type === "string" ? event.type : "";
+	if (eventType === "response.output_text.delta") appendTextDelta(state, event.delta, request);
+	else if (eventType === "response.reasoning_text.delta") appendReasoningDelta(state, event.delta, request);
+	else if (eventType === "response.output_item.added") startOutputItem(state, event.item);
+	else if (eventType === "response.function_call_arguments.delta") appendPendingCallDelta(state, event.delta);
+	else if (eventType === "response.output_item.done") finishOutputItem(state, event.item);
+	else if (eventType === "response.completed" && event.response) {
+		state.requestId = event.response._request_id ?? "";
+		const usage = normalizeUsage(event.response.usage);
+		if (usage) state.usage = usage;
+		const reasoning = parseReasoning(event.response);
+		if (reasoning) state.reasoningParts.push(reasoning);
+	}
+}
+
+function processChatCompatibleStreamEvent(state: OpenAIStreamState, event: OpenAIStreamEventLike, request: ModelRequest): void {
+	for (const choice of event.choices ?? []) {
+		appendTextDelta(state, choice.delta?.content ?? undefined, request);
+		appendReasoningDelta(state, choice.delta?.reasoning_content ?? undefined, request);
+		for (const call of choice.delta?.tool_calls ?? []) {
+			const index = call.index ?? 0;
+			const current = state.chatToolCalls.get(index) ?? { id: "", name: "", json: "" };
+			if (call.id) current.id = call.id;
+			if (call.function?.name) current.name = call.function.name;
+			if (call.function?.arguments) current.json += call.function.arguments;
+			state.chatToolCalls.set(index, current);
+		}
+	}
+	const usage = normalizeUsage(event.usage);
+	if (usage) state.usage = usage;
+	state.requestId = event._request_id ?? state.requestId;
+}
+
+function appendTextDelta(state: OpenAIStreamState, delta: string | null | undefined, request: ModelRequest): void {
+	if (!delta) return;
+	state.fullText += delta;
+	request.streamCallbacks?.onTextDelta?.(delta, state.fullText);
+}
+
+function appendReasoningDelta(state: OpenAIStreamState, delta: string | null | undefined, request: ModelRequest): void {
+	if (!delta) return;
+	state.reasoningParts.push(delta);
+	request.streamCallbacks?.onReasoningDelta?.(delta, state.reasoningParts.join(""));
+}
+
+function startOutputItem(state: OpenAIStreamState, item: OpenAIOutputItemLike | undefined): void {
+	if (item?.type === "function_call") {
+		state.pendingCall = { id: item.call_id ?? item.id ?? "", name: item.name ?? "", json: "" };
+	} else if (item?.type === "reasoning") {
+		const reasoning = parseReasoning({ output: item });
+		if (reasoning) state.reasoningParts.push(reasoning);
+	}
+}
+
+function appendPendingCallDelta(state: OpenAIStreamState, delta: string | null | undefined): void {
+	if (state.pendingCall && delta) state.pendingCall.json += delta;
+}
+
+function finishOutputItem(state: OpenAIStreamState, item: OpenAIOutputItemLike | undefined): void {
+	if (state.pendingCall) {
+		state.toolCalls.push(state.pendingCall);
+		delete state.pendingCall;
+	}
+	if (item?.type === "reasoning") {
+		const reasoning = parseReasoning({ output: item });
+		if (reasoning) state.reasoningParts.push(reasoning);
+	}
+}
+
+function streamResponseFromState(state: OpenAIStreamState, request: ModelRequest): ModelResponse {
+	const rawCalls = [...state.toolCalls, ...state.chatToolCalls.values()].filter((call) => call.id && call.name);
+	const toolCalls = rawCalls.map((call) => ({ id: call.id, name: call.name, input: parseToolInput(call.json) }));
+	const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
+	const reasoning = shouldReturnReasoning(policy, toolCalls) ? joinUnique(state.reasoningParts) : undefined;
+	return {
+		text: state.fullText,
+		...(reasoning ? { reasoning } : {}),
+		...(toolCalls.length > 0 ? { toolCalls } : {}),
+		...(state.requestId ? { requestId: state.requestId } : {}),
+		...(state.usage ? { usage: state.usage } : {}),
+		metadata: {
+			...(state.requestId ? { requestId: state.requestId } : {}),
+			...(state.usage ? { usage: { input_tokens: state.usage.inputTokens, output_tokens: state.usage.outputTokens } } : {}),
+		},
+	};
+}
+
+function joinUnique(parts: string[]): string | undefined {
+	const nonEmpty = parts.filter((part) => part.length > 0);
+	if (nonEmpty.length === 0) return undefined;
+	const combined = nonEmpty.join("");
+	const last = nonEmpty[nonEmpty.length - 1]!;
+	return nonEmpty.length > 1 && combined.slice(0, -last.length) === last ? last : combined;
 }
 
 function parseChoiceText(content: OpenAIChatMessageLike["content"]): string | undefined {
@@ -320,6 +560,14 @@ function numberAny(value: Record<string, unknown>, keys: string[]): number | und
 function sumKnown(values: Array<number | undefined>): number | undefined {
 	if (!values.some((value) => value !== undefined)) return undefined;
 	return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+function parseToolInput(json: string): unknown {
+	try {
+		return JSON.parse(json);
+	} catch {
+		return { raw: json };
+	}
 }
 
 function emptySchema(): Record<string, unknown> {

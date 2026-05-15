@@ -334,7 +334,7 @@ function previewMessages(messages: ModelMessage[]): ModelMessage[] {
 	return messages.map((message) => ({
 		...message,
 		content: previewText(message.content),
-		...(message.contentBlocks ? { contentBlocks: message.contentBlocks.map((block) => block.type === "text" || block.type === "reasoning" ? { ...block, text: previewText(block.text) } : block.type === "tool_result" ? { ...block, content: previewText(block.content) } : block) } : {}),
+		...(message.contentBlocks ? { contentBlocks: message.contentBlocks.map((block) => block.type === "text" ? { ...block, text: previewText(block.text) } : block.type === "reasoning" ? { ...block, text: `[reasoning omitted: ${block.text.length} chars]` } : block.type === "tool_result" ? { ...block, content: previewText(block.content) } : block) } : {}),
 	}));
 }
 

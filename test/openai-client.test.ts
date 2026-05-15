@@ -56,6 +56,24 @@ describe("OpenAIModelClient", () => {
 		});
 	});
 
+	it("sends DeepSeek thinking fields only when configured", async () => {
+		let captured: unknown;
+		const client: OpenAIResponsesClient = {
+			responses: {
+				async create(params) {
+					captured = params;
+					return { output_text: "hi" };
+				},
+			},
+		};
+		const deepseekAgent: AgentSpec = { ...agent, model: { ...agent.model, reasoningLevel: "xhigh", options: { reasoning: { provider: { style: "deepseek" } } } } };
+
+		await new OpenAIModelClient({ client }).complete({ agent: deepseekAgent, task, turn: 1, messages: [{ role: "user", content: task.prompt }] });
+
+		expect(captured).toMatchObject({ extra_body: { thinking: { type: "enabled" }, reasoning_effort: "max" } });
+		expect(captured).not.toMatchObject({ reasoning: expect.anything() });
+	});
+
 	it("sends tools and formats tool results for the Responses API", async () => {
 		let captured: unknown;
 		const client: OpenAIResponsesClient = {
@@ -143,7 +161,7 @@ describe("OpenAIModelClient", () => {
 		};
 
 		const response = await new OpenAIModelClient({ client }).complete({
-			agent,
+			agent: { ...agent, model: { ...agent.model, options: { reasoning: { returnContent: "always", sendHistory: "always" } } } },
 			task,
 			turn: 2,
 			messages: [
@@ -175,7 +193,7 @@ describe("OpenAIModelClient", () => {
 		};
 
 		const response = await new OpenAIModelClient({ client }).complete({
-			agent,
+			agent: { ...agent, model: { ...agent.model, options: { reasoning: { returnContent: "always" } } } },
 			task,
 			turn: 1,
 			messages: [{ role: "user", content: task.prompt }],
@@ -202,8 +220,9 @@ describe("OpenAIModelClient", () => {
 			},
 		};
 
+		const deepseekAgent: AgentSpec = { ...agent, model: { ...agent.model, options: { reasoning: { provider: { style: "deepseek" } } } } };
 		const first = await new OpenAIModelClient({ client }).complete({
-			agent,
+			agent: deepseekAgent,
 			task,
 			turn: 1,
 			messages: [{ role: "user", content: task.prompt }],
@@ -211,7 +230,7 @@ describe("OpenAIModelClient", () => {
 		expect(first).toMatchObject({ text: "", reasoning: "deepseek hidden chain", toolCalls: [{ id: "call_1", name: "read_file", input: { path: "README.md" } }] });
 
 		await new OpenAIModelClient({ client }).complete({
-			agent,
+			agent: deepseekAgent,
 			task,
 			turn: 2,
 			messages: [
@@ -389,4 +408,181 @@ describe("OpenAIModelClient", () => {
 		expect(captured[1]).not.toMatchObject({ prompt_cache_retention: expect.anything() });
 	});
 
+	
+		describe("streaming (SDK client)", () => {
+			it("streams text deltas and calls onTextDelta via SDK client", async () => {
+				const deltas: string[] = [];
+				const client = sdkStreamingClient([
+					{ type: "response.output_text.delta", delta: "hello" },
+					{ type: "response.output_text.delta", delta: " world" },
+					{ response: { _request_id: "req_1", usage: { input_tokens: 10, output_tokens: 5 } }, type: "response.completed" },
+				]);
+
+				const response = await new OpenAIModelClient({ client }).complete({
+					agent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+					streamCallbacks: { onTextDelta: (d) => deltas.push(d) },
+				});
+
+				expect(response.text).toBe("hello world");
+				expect(deltas).toEqual(["hello", " world"]);
+				expect(response.usage).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+			});
+
+			it("parses reasoning deltas in SDK streaming", async () => {
+				const client = sdkStreamingClient([
+					{ type: "response.reasoning_text.delta", delta: "hidden " },
+					{ type: "response.reasoning_text.delta", delta: "chain" },
+					{ type: "response.output_item.added", item: { type: "function_call", call_id: "call_1", name: "read_file" } },
+					{ type: "response.function_call_arguments.delta", delta: "{\"path\":\"README.md\"}" },
+					{ type: "response.output_item.done", item: { type: "function_call", call_id: "call_1", name: "read_file" } },
+				]);
+
+				const response = await new OpenAIModelClient({ client }).complete({
+					agent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+				});
+
+				expect(response.reasoning).toBe("hidden chain");
+				expect(response.toolCalls).toEqual([{ id: "call_1", name: "read_file", input: { path: "README.md" } }]);
+			});
+
+			it("parses tool calls in SDK streaming", async () => {
+				const client = sdkStreamingClient([
+					{ type: "response.output_item.added", item: { type: "function_call", call_id: "call_1", name: "read_file" } },
+					{ type: "response.function_call_arguments.delta", delta: "{\"path\":\"README.md\"}" },
+					{ type: "response.output_item.done", item: { type: "function_call", call_id: "call_1", name: "read_file", arguments: "{\"path\":\"README.md\"}" } },
+					{ response: { usage: { input_tokens: 10, output_tokens: 3 } }, type: "response.completed" },
+				]);
+
+				const response = await new OpenAIModelClient({ client }).complete({
+					agent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+				});
+
+				expect(response.toolCalls).toEqual([{ id: "call_1", name: "read_file", input: { path: "README.md" } }]);
+			});
+
+			it("falls back to non-streaming when SDK client returns plain object", async () => {
+				const client: OpenAIResponsesClient = {
+					responses: {
+						async create() {
+							return { output_text: "hi", _request_id: "req_1", usage: { input_tokens: 2, output_tokens: 1 } };
+						},
+					},
+				};
+
+				const response = await new OpenAIModelClient({ client }).complete({
+					agent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+				});
+
+				expect(response.text).toBe("hi");
+				expect(response.requestId).toBe("req_1");
+			});
+		});
+
+		describe("streaming (fetch)", () => {
+			it("streams text deltas via SSE over fetch", async () => {
+				const deltas: string[] = [];
+				const client = new OpenAIModelClient({
+					apiKey: "key",
+					fetchFn: async () => sseResponse(openAISSEEvents()),
+				});
+
+				const response = await client.complete({
+					agent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+					streamCallbacks: { onTextDelta: (d) => deltas.push(d) },
+				});
+
+				expect(response.text).toBe("hello world");
+				expect(deltas).toEqual(["hello", " world"]);
+				expect(response.usage).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+			});
+
+			it("parses chat-compatible reasoning_content in fetch streaming", async () => {
+				const client = new OpenAIModelClient({
+					apiKey: "key",
+					fetchFn: async () => sseResponse([
+						"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden \"}}]}\n\n",
+						"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"chain\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n\n",
+						"data: [DONE]\n\n",
+					]),
+				});
+				const deepseekAgent: AgentSpec = { ...agent, model: { ...agent.model, options: { reasoning: { provider: { style: "deepseek" } } } } };
+
+				const response = await client.complete({
+					agent: deepseekAgent,
+					task,
+					turn: 1,
+					messages: [{ role: "user", content: task.prompt }],
+					stream: true,
+				});
+
+				expect(response.reasoning).toBe("hidden chain");
+				expect(response.toolCalls).toEqual([{ id: "call_1", name: "read_file", input: { path: "README.md" } }]);
+			});
+		});
 });
+
+function sdkStreamingClient(events: Array<Record<string, unknown>>): OpenAIResponsesClient {
+	return {
+		responses: {
+			async create() {
+				return makeAsyncIterable(events) as unknown as Awaited<ReturnType<OpenAIResponsesClient["responses"]["create"]>>;
+			},
+		},
+	};
+}
+
+function makeAsyncIterable<T>(items: T[]): AsyncIterable<T> {
+	return {
+		[Symbol.asyncIterator]() {
+			let i = 0;
+			return {
+				async next() {
+					if (i < items.length) return { value: items[i++]!, done: false };
+					return { value: undefined as unknown as T, done: true };
+				},
+			};
+		},
+	};
+}
+
+function sseResponse(events: string[]): Response {
+	const body = new ReadableStream({
+		start(controller) {
+			const encoder = new TextEncoder();
+			for (const event of events) {
+				controller.enqueue(encoder.encode(event));
+			}
+			controller.close();
+		},
+	});
+	return new Response(body, { status: 200 });
+}
+
+function openAISSEEvents(): string[] {
+	return [
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}\n\n",
+		"data: {\"type\":\"response.completed\",\"response\":{\"_request_id\":\"req_1\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n\n",
+		"data: [DONE]\n\n",
+	];
+}

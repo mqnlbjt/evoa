@@ -25,6 +25,32 @@ describe("JsonSessionStore", () => {
 		});
 	});
 
+	it("round-trips reasoning content blocks", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-session-"));
+		const store = new JsonSessionStore(root);
+
+		await store.saveSession({
+			id: "demo",
+			agentId: "agent",
+			messages: [
+				{
+					role: "assistant",
+					content: "visible",
+					contentBlocks: [
+						{ type: "reasoning", text: "hidden chain", provider: "openai", format: "openai-reasoning-content" },
+						{ type: "text", text: "visible" },
+					],
+				},
+			],
+			createdAt: 1,
+			updatedAt: 2,
+		});
+
+		expect(await store.loadSession("demo")).toMatchObject({
+			messages: [{ role: "assistant", contentBlocks: [{ type: "reasoning", text: "hidden chain", provider: "openai", format: "openai-reasoning-content" }, { type: "text", text: "visible" }] }],
+		});
+	});
+
 	it("round-trips startup context", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-session-"));
 		const store = new JsonSessionStore(root);

@@ -181,6 +181,55 @@ describe("chat session regression", { timeout: 10_000 }, () => {
 		]));
 	});
 
+	it("restores DeepSeek reasoning content when resuming tool-call sessions", async () => {
+		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
+		const agentFile = path.join(root, "agent.json");
+		await writeFile(agentFile, JSON.stringify({
+			id: "deepseek-agent",
+			version: "1.0.0",
+			name: "DeepSeek Agent",
+			kind: "baseline",
+			model: { provider: "local", model: "deepseek-reasoner", reasoningLevel: "high", options: { reasoning: { provider: { style: "deepseek" } } } },
+			prompts: { system: "Use tools." },
+			tools: { allowedTools: ["read_file"], permissionMode: "allow", maxToolCalls: 2 },
+			runtime: { maxTurns: 3 },
+		}));
+		await writeSession(root, "demo", {
+			id: "demo",
+			agentId: "deepseek-agent",
+			messages: [
+				{ role: "user", content: "read" },
+				{
+					role: "assistant",
+					content: "",
+					contentBlocks: [
+						{ type: "reasoning", text: "hidden chain" },
+						{ type: "tool_call", id: "call_1", name: "read_file", input: { path: "note.txt" } },
+					],
+				},
+				{ role: "tool", toolCallId: "call_1", toolName: "read_file", content: "persisted" },
+			],
+			startupContext: { agentPath: agentFile, provider: "local", model: "deepseek-reasoner", baseURL: "http://localhost:8317/v1", providerFormat: "openai-responses", toolProfile: "read-only" },
+			createdAt: 1,
+			updatedAt: 1,
+		});
+		let resumedInput: unknown;
+		const io = createIO();
+		const code = await main(["chat", "continue", "--resume", "demo", "--session-dir", root, "--json"], {
+			...io,
+			openAIClientFactory: () => ({ responses: { async create(input) { if (isMemoryExtractionRequest(input)) return invalidMemoryExtraction(); resumedInput = input.input; return { output_text: "done" }; } } }),
+			now: () => 2,
+			createId: nextId(),
+		});
+
+		expect(code).toBe(0);
+		expect(resumedInput).toEqual(expect.arrayContaining([
+			expect.objectContaining({ role: "assistant", content: "", reasoning_content: "hidden chain" }),
+			expect.objectContaining({ type: "function_call", call_id: "call_1", name: "read_file" }),
+			expect.objectContaining({ type: "function_call_output", call_id: "call_1" }),
+		]));
+	});
+
 	it("uses current agent memory policy when resuming old sessions", async () => {
 		const root = await mkdtemp(path.join(tmpdir(), "evolving-agent-chat-session-"));
 		const agentFile = path.join(root, "agent.json");
