@@ -8,7 +8,7 @@ import { createMemoryTools } from "../memory/tools.js";
 import type { ModelClient, ModelMessage } from "../models/types.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { TraceEvent, TraceEventObserver } from "../runtime/events.js";
-import type { FollowUpMessageProvider } from "../runtime/loop.js";
+import { createAutoContinueFollowUpProvider } from "./auto-continue.js";
 import { appendUserMessage, createAgentSession, entriesFromMessages, type AgentSession, type SessionEntry } from "../runtime/session.js";
 import { abortMessage, abortReason, isAbortError, isRuntimeTimeoutError } from "../runtime/timeout.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
@@ -18,6 +18,7 @@ import type { ToolRegistry } from "../tools/registry.js";
 import { createToolRegistryForProfileAsync, createToolRegistryWithBackgroundMcp } from "../tools/profiles.js";
 import type { BenchmarkCommand, ChatCommand, EvolveCommand, RunCommand, TuiCommand } from "./args.js";
 import { createRoutedModelClient, effectiveAgentForCommand } from "./model-routing.js";
+import { summarizeCompletedSession } from "../runtime/compaction.js";
 
 export interface ChatServiceDeps {
 	fetchFn?: typeof fetch;
@@ -108,6 +109,7 @@ export async function runChatTurn(context: ChatServiceContext, prompt: string, s
 	try {
 		const output = await context.runtime.runSession(session, signal);
 		recordChatEvent(context, session, "run_end", { status: "passed", durationMs: context.now() - startedAt });
+		summarizeCompletedSession(session);
 		await finalizeChatTurn(context, session, startMessageIndex, true);
 		return { answer: output.answer ?? "", trace: output.trace ?? [] };
 	} catch (error) {
@@ -226,22 +228,6 @@ function createRuntime(command: ResolvedChatCommand, deps: ChatServiceDeps, suba
 			},
 		} : {}),
 	});
-}
-
-const autoContinueFollowUps = [
-		"If the task is not yet complete, continue executing until finished. Do not explain that you are continuing; call the necessary tools directly. If already complete, ignore this message and give the final answer.",
-		"You planned more work but called no tools. If the task is incomplete, call tools NOW without further text. If complete, state the final answer.",
-		"Final check: you have not called tools for multiple turns. Either call tools immediately or confirm the task is done.",
-	] as const;
-
-function createAutoContinueFollowUpProvider(): FollowUpMessageProvider {
-	return (session, _response) => {
-		if (session.toolCallCount === 0) return [];
-		const count = session.messages.filter((m) => m.role === "user" && autoContinueFollowUps.includes(m.content as typeof autoContinueFollowUps[number])).length;
-		if (count >= autoContinueFollowUps.length) return [];
- 		const message = autoContinueFollowUps[count]!;
-		return [{ role: "user", content: message, contentBlocks: [{ type: "text", text: message }] }];
-	};
 }
 
 async function createToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): Promise<ToolRegistry> {

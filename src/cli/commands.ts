@@ -3,7 +3,7 @@ import path, { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { loadAgentDefinitionsFromFile } from "../agents/loader.js";
 import { AgentRuntime } from "../runtime/agent-runtime.js";
-import type { FollowUpMessageProvider } from "../runtime/loop.js";
+import { createAutoContinueFollowUpProvider } from "./auto-continue.js";
 import { BenchmarkRunner } from "../benchmark/runner.js";
 import { loadBenchmarkSuiteFromFile } from "../benchmark/loader.js";
 import { CompositeTaskGrader } from "../benchmark/grader.js";
@@ -17,7 +17,7 @@ import type { AgentTaskRunResult, SuiteRunResult } from "../benchmark/types.js";
 import { ModelRegistry, type ModelRegistryOptions } from "../models/registry.js";
 import { loadTaskSpecFromFile } from "../tasks/loader.js";
 import type { AgentSpec, SubagentSpec, TaskSpec } from "../specs.js";
-import type { ChatCommand, BenchmarkCommand, DiffCommand, EvolveCommand, McpDiagnosticsCommand, McpStatusCommand, ModelsDiscoverCommand, ReplayCommand, RunCommand } from "./args.js";
+import type { ChatCommand, BenchmarkCommand, DiffCommand, EvolveCommand, McpDiagnosticsCommand, McpStatusCommand, ModelsDiscoverCommand, ReplayCommand, RunCommand, SopListCommand, SopRunCommand, SopImportCommand, SopDepositCommand } from "./args.js";
 import { createRoutedModelClient, effectiveAgentForCommand } from "./model-routing.js";
 import { formatPercent, formatTable } from "./format.js";
 import type { ToolRegistry } from "../tools/registry.js";
@@ -36,6 +36,14 @@ import { MemoryManager } from "../memory/manager.js";
 import { createMemoryTools } from "../memory/tools.js";
 import type { AgentSessionStore, StoredAgentSession, StoredAgentStartupContext } from "../sessions/session-store.js";
 import { diffRunSources } from "../replay/run-diff.js";
+import { loadSopSpecsFromDirectory } from "../sop/loader.js";
+import { runSOP } from "../sop/runner.js";
+import type { SOPSpec, SOPResult } from "../sop/types.js";
+import { SopRegistry } from "../sop/registry.js";
+import { MemorySkillBank, FileSkillBank } from "../skills/store.js";
+import { depositSopDirectoryToSkillBank } from "../skills/sop-bridge.js";
+import { createSkillTool, createSkillContextTransform } from "../skills/skill-tool.js";
+import type { SkillBank } from "../skills/types.js";
 
 export interface CliDeps {
 	stdout?: Pick<NodeJS.WriteStream, "write">;
@@ -152,6 +160,82 @@ export async function handleDiff(command: DiffCommand, _deps: CliDeps): Promise<
 	};
 }
 
+export async function handleSopList(command: SopListCommand, _deps: CliDeps): Promise<CliResult> {
+	const specs = await loadSopSpecsFromDirectory(command.sopDir);
+	const json = {
+		ok: true,
+		command: command.kind,
+		sopDir: command.sopDir,
+		sops: specs.map((s) => ({ id: s.id, name: s.name, version: s.version, description: s.description, steps: s.steps.length })),
+	};
+	return {
+		exitCode: 0,
+		json,
+		human: formatSopListHuman(specs),
+	};
+}
+
+export async function handleSopRun(command: SopRunCommand, deps: CliDeps): Promise<CliResult> {
+	const specs = await loadSopSpecsFromDirectory(command.sopDir);
+	const spec = specs.find((s) => s.id === command.sopId);
+	if (!spec) throw new Error(`SOP "${command.sopId}" not found in ${command.sopDir}`);
+
+	const toolRegistry = await createToolRegistryForProfileAsync({
+		profile: "dangerous",
+		workspaceRoot: deps.workspaceRoot ?? process.cwd(),
+		...(deps.fetchFn ? { fetch: deps.fetchFn } : {}),
+	});
+
+	const session = createAgentSession({
+		id: deps.createId?.() ?? crypto.randomUUID(),
+		agent: {
+			id: "sop-cli",
+			version: "0.0.0",
+			name: "SOP CLI",
+			kind: "baseline",
+			model: { provider: "none", model: "none" },
+			prompts: { system: "" },
+			tools: { allowedTools: [] },
+			runtime: { maxTurns: 1 },
+		},
+		task: {
+			id: command.sopId,
+			type: "general",
+			title: command.sopId,
+			prompt: `Run SOP: ${command.sopId}`,
+			scoring: { method: "rubric", config: { contains: [] } },
+		},
+	});
+
+	const specMap = new Map(specs.map((s) => [s.id, s]));
+	async function runSubSOP(sopId: string, input: Record<string, unknown>, subSession: AgentSession): Promise<SOPResult> {
+		const subSpec = specMap.get(sopId);
+		if (!subSpec) throw new Error(`sub-SOP "${sopId}" not found`);
+		return runSOP(subSpec, {
+			params: input,
+			session: subSession,
+			toolRegistry,
+			...(deps.workspaceRoot ? { workspaceRoot: deps.workspaceRoot } : {}),
+			runSubSOP,
+		});
+	}
+
+	const result = await runSOP(spec, {
+		params: {},
+		session,
+		toolRegistry,
+		...(deps.workspaceRoot ? { workspaceRoot: deps.workspaceRoot } : {}),
+		runSubSOP,
+	});
+
+	return {
+		exitCode: result.status === "failed" ? 1 : 0,
+		json: { ok: result.status !== "failed", command: command.kind, sopId: command.sopId, result },
+		trace: result,
+		human: formatSopRunHuman(result),
+	};
+}
+
 export async function handleEvolve(command: EvolveCommand, deps: CliDeps): Promise<CliResult> {
 	const baselineBundle = await loadAgentBundle(command.baselineAgentPath);
 	const candidateBundle = await loadAgentBundle(command.candidateAgentPath);
@@ -261,7 +345,7 @@ async function createChatContext(command: ChatCommand, deps: CliDeps): Promise<C
 	const sessionId = resolvedCommand.resumeSessionId ?? resolvedCommand.sessionId ?? (deps.createId?.() ?? crypto.randomUUID());
 	const modelClient = createRoutedModelClient(resolvedCommand, deps, agent);
 	const memoryManager = createMemoryManager(agent, resolvedCommand, modelClient);
-	const runtime = await createRuntime(resolvedCommand, deps, bundle.subagents, memoryManager, modelClient);
+	const runtime = await createRuntime(resolvedCommand, deps, bundle.subagents, memoryManager, modelClient, agent);
 	return {
 		command: resolvedCommand,
 		agent,
@@ -390,16 +474,17 @@ function createChatInput(deps: CliDeps): { inputLines: AsyncIterable<string>; cl
 async function createRunner(command: RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = [], agent?: AgentSpec): Promise<BenchmarkRunner> {
 	const modelClient = agent ? createRoutedModelClient(command, deps, agent) : undefined;
 	return new BenchmarkRunner({
-		runtime: await createRuntime(command, deps, subagents, undefined, modelClient),
+		runtime: await createRuntime(command, deps, subagents, undefined, modelClient, agent),
 		grader: new CompositeTaskGrader({ modelClient }),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
 	});
 }
 
-async function createRuntime(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = [], memoryManager?: MemoryManager, modelClient = createModelClient(command, deps)): Promise<AgentRuntime> {
+async function createRuntime(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps, subagents: SubagentSpec[] = [], memoryManager?: MemoryManager, modelClient = createModelClient(command, deps), agent?: AgentSpec): Promise<AgentRuntime> {
 	const toolRegistry = await createCommandToolRegistry(command, deps);
 	registerMemoryTools(toolRegistry, command, deps, memoryManager);
+	const skillBank = await registerSkillTools(toolRegistry, agent, deps);
 	return new AgentRuntime({
 		modelClient,
 		toolRegistry,
@@ -409,27 +494,8 @@ async function createRuntime(command: ResolvedChatCommand | RunCommand | Benchma
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
 		...(command.kind === "chat" ? { getFollowUpMessages: createAutoContinueFollowUpProvider() } : {}),
+		...(skillBank ? { contextTransform: createSkillContextTransform(skillBank) } : {}),
 	});
-}
-
-const autoContinueFollowUp = "Continue the task if it is not complete. Do not explain that you are continuing; call the necessary tools or give the final answer only when complete.";
-const interruptedProgressPhrases = ["let me", "i’ll check", "i will check", "i’ll check", "i need to", "found the issue"];
-const completionPhrases = ["done", "completed", "fixed"];
-
-function createAutoContinueFollowUpProvider(): FollowUpMessageProvider {
-	return (session, response) => {
-		if (!looksLikeInterruptedProgress(response.text?.trim() ?? "")) return [];
-		if (session.messages.filter((message) => message.role === "user" && message.content === autoContinueFollowUp).length >= 2) return [];
-		return [{ role: "user", content: autoContinueFollowUp, contentBlocks: [{ type: "text", text: autoContinueFollowUp }] }];
-	};
-}
-
-function looksLikeInterruptedProgress(text: string): boolean {
-	if (!text) return false;
-	const normalized = text.toLowerCase();
-	if (completionPhrases.some((phrase) => normalized.includes(phrase))) return false;
-	if (/[:：]\s*$/.test(text)) return true;
-	return interruptedProgressPhrases.some((phrase) => normalized.includes(phrase));
 }
 
 async function createCommandToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: CliDeps): Promise<ToolRegistry> {
@@ -716,7 +782,77 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
 	await writeTextFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function formatSopListHuman(specs: SOPSpec[]): string {
+	if (specs.length === 0) return "No SOPs found";
+	const rows = [["ID", "NAME", "VERSION", "STEPS", "DESCRIPTION"], ...specs.map((s) => [s.id, s.name, s.version, String(s.steps.length), s.description])];
+	return [`Found ${specs.length} SOP(s)`, "", formatTable(rows)].join("\n");
+}
+
+function formatSopRunHuman(result: SOPResult): string {
+	const rows = [["STEP", "STATUS", "DURATION"], ...result.stepResults.map((r) => [r.stepId, r.status, `${r.durationMs}ms`])];
+	return [
+		`SOP ${result.sopId}: ${result.status}`,
+		`Total duration: ${result.totalDurationMs}ms`,
+		"",
+		formatTable(rows),
+		...(result.finalVerification ? [`Final verification: ${result.finalVerification.passed ? "passed" : "failed"}${result.finalVerification.detail ? ` (${result.finalVerification.detail})` : ""}`] : []),
+	].join("\n");
+}
+
 async function writeTextFile(filePath: string, content: string): Promise<void> {
 	await mkdir(dirname(filePath), { recursive: true });
 	await writeFile(filePath, content, "utf-8");
 }
+
+	async function registerSkillTools(toolRegistry: ToolRegistry, agent: AgentSpec | undefined, deps: CliDeps): Promise<SkillBank | undefined> {
+		if (!agent?.skills) return undefined;
+		const skills = agent.skills;
+		if (skills.enabled === false) return undefined;
+		if (toolRegistry.get("skill")) return undefined;
+
+		const sopDir = skills.sopDir ?? "sop";
+
+		const registry = new SopRegistry();
+		await registry.loadAndRegister({
+			sopDir,
+			toolRegistry,
+		});
+
+		const bank = skills.skillBankPath
+			? new FileSkillBank({ path: skills.skillBankPath })
+			: new MemorySkillBank();
+
+		await depositSopDirectoryToSkillBank(sopDir, bank, { force: true });
+
+		const skillTool = createSkillTool({ bank, toolRegistry });
+		toolRegistry.register(skillTool);
+
+		return bank;
+	}
+
+	export async function handleSopImport(command: SopImportCommand, deps: CliDeps): Promise<CliResult> {
+		const { parseMarketSkillContent, marketSkillToSopSpec } = await import("../skills/market-converter.js");
+		const { stringify } = await import("yaml");
+		const raw = await readFile(command.inputPath, "utf-8");
+		const { config, body } = await parseMarketSkillContent(raw);
+		const sop = marketSkillToSopSpec(config, body);
+		const yamlContent = stringify(sop);
+		const outputPath = path.join(command.outputDir, `${sop.id}.sop.yaml`);
+		await writeTextFile(outputPath, yamlContent);
+		return {
+			exitCode: 0,
+			json: { ok: true, command: command.kind, sop: { id: sop.id, name: sop.name, version: sop.version, steps: sop.steps.length }, outputPath },
+			human: `Imported SKILL.md "${command.inputPath}" -> ${outputPath}`,
+		};
+	}
+
+	export async function handleSopDeposit(command: SopDepositCommand, deps: CliDeps): Promise<CliResult> {
+		const { createOrLoadSkillBank, depositSopDirectoryToSkillBank } = await import("../skills/sop-bridge.js");
+		const bank = await createOrLoadSkillBank(command.skillBankPath ?? "skills.json");
+		const skills = await depositSopDirectoryToSkillBank(command.sopDir, bank, { ...(command.force !== undefined ? { force: command.force } : {}) });
+		return {
+			exitCode: 0,
+			json: { ok: true, command: command.kind, sopDir: command.sopDir, skillCount: skills.length, skills: skills.map((s) => ({ id: s.id, name: s.name })) },
+			human: `Deposited ${skills.length} skill(s) from ${command.sopDir} to skill bank`,
+		};
+	}

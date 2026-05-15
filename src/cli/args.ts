@@ -33,7 +33,7 @@ export interface CliProvidedFlags {
 	sessionDir?: boolean;
 }
 
-export type CliCommand = ModelsDiscoverCommand | McpStatusCommand | McpDiagnosticsCommand | ChatCommand | TuiCommand | RunCommand | BenchmarkCommand | EvolveCommand | ReplayCommand | DiffCommand | HelpCommand;
+export type CliCommand = ModelsDiscoverCommand | McpStatusCommand | McpDiagnosticsCommand | ChatCommand | TuiCommand | RunCommand | BenchmarkCommand | EvolveCommand | ReplayCommand | DiffCommand | HelpCommand | SopListCommand | SopRunCommand | SopImportCommand | SopDepositCommand;
 
 export interface BaseCommand {
 	format: OutputFormat;
@@ -146,6 +146,30 @@ export interface HelpCommand {
 	format: OutputFormat;
 }
 
+export interface SopListCommand extends BaseCommand {
+	kind: "sop.list";
+	sopDir: string;
+}
+
+export interface SopRunCommand extends BaseCommand {
+	kind: "sop.run";
+	sopId: string;
+	sopDir: string;
+}
+
+export interface SopImportCommand extends BaseCommand {
+	kind: "sop.import";
+	inputPath: string;
+	outputDir: string;
+}
+
+export interface SopDepositCommand extends BaseCommand {
+	kind: "sop.deposit";
+	sopDir: string;
+	skillBankPath?: string;
+	force?: boolean;
+}
+
 export interface ParseResult {
 	command?: CliCommand;
 	diagnostics: string[];
@@ -153,8 +177,8 @@ export interface ParseResult {
 
 type FlagValues = Record<string, string | boolean>;
 
-const valueFlags = new Set(["--provider", "--model", "--base-url", "--api-key", "--provider-format", "--tool-profile", "--report", "--report-format", "--history", "--format", "--output", "--trace", "--run-id", "--left", "--right", "--agent", "--baseline-agent", "--candidate-agent", "--task", "--suite", "--session", "--resume", "--session-dir", "--config"]);
-const booleanFlags = new Set(["--json", "--help"]);
+const valueFlags = new Set(["--provider", "--model", "--base-url", "--api-key", "--provider-format", "--tool-profile", "--report", "--report-format", "--history", "--format", "--output", "--trace", "--run-id", "--left", "--right", "--agent", "--baseline-agent", "--candidate-agent", "--task", "--suite", "--session", "--resume", "--session-dir", "--sop-dir", "--output-dir", "--skill-bank", "--config"]);
+const booleanFlags = new Set(["--json", "--help", "--force"]);
 
 export function parseCliArgs(args: string[], defaults: CliDefaults = {}): ParseResult {
 	const diagnostics: string[] = [];
@@ -167,7 +191,7 @@ export function parseCliArgs(args: string[], defaults: CliDefaults = {}): ParseR
 		return { diagnostics: [`unknown command ${args[0]}`] };
 	}
 
-	const parsedArgs = commandParts.kind === "chat" ? parseChatArgs(args.slice(commandParts.consumed), diagnostics) : { flags: parseFlags(args.slice(commandParts.consumed), diagnostics) };
+	const parsedArgs = commandParts.kind === "chat" ? parseChatArgs(args.slice(commandParts.consumed), diagnostics) : commandParts.kind === "sop.run" ? parseSopRunArgs(args.slice(commandParts.consumed), diagnostics) : commandParts.kind === "sop.import" ? parseSopImportArgs(args.slice(commandParts.consumed), diagnostics) : { flags: parseFlags(args.slice(commandParts.consumed), diagnostics) };
 	const flags = parsedArgs.flags;
 	const format = parseOutputFormat(flags, diagnostics);
 	const resolvedDefaults = defaults;
@@ -187,7 +211,8 @@ export function parseCliArgs(args: string[], defaults: CliDefaults = {}): ParseR
 		return parseCommandResult(buildMcpDiagnostics(common, resolvedDefaults), diagnostics);
 	}
 	if (commandParts.kind === "chat") {
-		return parseCommandResult(buildChat(flags, parsedArgs.prompt, common, resolvedDefaults, diagnostics), diagnostics);
+		const prompt = (parsedArgs as { prompt?: string }).prompt;
+		return parseCommandResult(buildChat(flags, prompt, common, resolvedDefaults, diagnostics), diagnostics);
 	}
 	if (commandParts.kind === "tui") {
 		return parseCommandResult(buildTui(flags, common, resolvedDefaults, diagnostics), diagnostics);
@@ -203,6 +228,20 @@ export function parseCliArgs(args: string[], defaults: CliDefaults = {}): ParseR
 	}
 	if (commandParts.kind === "replay") {
 		return parseCommandResult(buildReplay(flags, common, diagnostics), diagnostics);
+	}
+	if (commandParts.kind === "sop.list") {
+		return parseCommandResult(buildSopList(flags, common, diagnostics), diagnostics);
+	}
+	if (commandParts.kind === "sop.run") {
+		const sopId = (parsedArgs as { sopId?: string }).sopId;
+		return parseCommandResult(buildSopRun(flags, sopId, common, diagnostics), diagnostics);
+	}
+	if (commandParts.kind === "sop.import") {
+		const positional = (parsedArgs as { positional?: string }).positional;
+		return parseCommandResult(buildSopImport(flags, positional, common, diagnostics), diagnostics);
+	}
+	if (commandParts.kind === "sop.deposit") {
+		return parseCommandResult(buildSopDeposit(flags, common, diagnostics), diagnostics);
 	}
 	return parseCommandResult(buildDiff(flags, common, diagnostics), diagnostics);
 }
@@ -222,6 +261,8 @@ Usage:
   evolving-agent evolve --suite <file> --baseline-agent <file> --candidate-agent <file> [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>] [--tool-profile <profile>] [--report <file>] [--report-format <json|markdown>] [--history <file>] [--config <file>] [--json]
   evolving-agent replay --trace <file> [--run-id <id>] [--json]
   evolving-agent diff --left <file> --right <file> [--json]
+  evolving-agent sop list [--sop-dir <dir>] [--json]
+  evolving-agent sop run <id> [--sop-dir <dir>] [--json]
 
 Options:
   --provider <id>
@@ -236,6 +277,7 @@ Options:
   --session <id>
   --resume <id>
   --session-dir <dir>
+  --sop-dir <dir>
   --config <file>
   --format <human|json>
   --json
@@ -259,6 +301,10 @@ function parseCommandParts(args: string[]): { kind: CliCommand["kind"]; consumed
 	if (args[0] === "evolve") return { kind: "evolve", consumed: 1 };
 	if (args[0] === "replay") return { kind: "replay", consumed: 1 };
 	if (args[0] === "diff") return { kind: "diff", consumed: 1 };
+	if (args[0] === "sop" && args[1] === "list") return { kind: "sop.list", consumed: 2 };
+	if (args[0] === "sop" && args[1] === "run") return { kind: "sop.run", consumed: 2 };
+	if (args[0] === "sop" && args[1] === "import") return { kind: "sop.import", consumed: 2 };
+	if (args[0] === "sop" && args[1] === "deposit") return { kind: "sop.deposit", consumed: 2 };
 	return undefined;
 }
 
@@ -557,6 +603,57 @@ function buildDiff(flags: FlagValues, common: BaseCommand & { providerFormat: Pr
 	};
 }
 
+function buildSopList(flags: FlagValues, common: BaseCommand & { providerFormat: ProviderFormat }, diagnostics: string[]): SopListCommand | undefined {
+	const sopDir = stringFlag(flags, "--sop-dir") ?? "sop";
+	return {
+		kind: "sop.list",
+		sopDir,
+		format: common.format,
+		...(common.outputPath ? { outputPath: common.outputPath } : {}),
+	};
+}
+
+function buildSopRun(flags: FlagValues, sopId: string | undefined, common: BaseCommand & { providerFormat: ProviderFormat }, diagnostics: string[]): SopRunCommand | undefined {
+	if (!sopId) {
+		diagnostics.push("missing required argument: sop <id>");
+		return undefined;
+	}
+	const sopDir = stringFlag(flags, "--sop-dir") ?? "sop";
+	return {
+		kind: "sop.run",
+		sopId,
+		sopDir,
+		format: common.format,
+		...(common.outputPath ? { outputPath: common.outputPath } : {}),
+		...(common.tracePath ? { tracePath: common.tracePath } : {}),
+	};
+}
+
+function parseSopRunArgs(args: string[], diagnostics: string[]): { flags: FlagValues; sopId?: string } {
+	const flagArgs: string[] = [];
+	let sopId: string | undefined;
+	for (let index = 0; index < args.length; index += 1) {
+		const value = args[index];
+		if (value?.startsWith("--")) {
+			flagArgs.push(value);
+			if (!booleanFlags.has(value)) {
+				const next = args[index + 1];
+				if (next !== undefined) {
+					flagArgs.push(next);
+					index += 1;
+				}
+			}
+			continue;
+		}
+		if (sopId === undefined) {
+			sopId = value;
+			continue;
+		}
+		diagnostics.push(`unexpected argument ${value}`);
+	}
+	return { flags: parseFlags(flagArgs, diagnostics), ...(sopId ? { sopId } : {}) };
+}
+
 function parseCommandResult(command: CliCommand | undefined, diagnostics: string[]): ParseResult {
 	return command ? { command, diagnostics } : { diagnostics };
 }
@@ -646,4 +743,59 @@ function stringFlag(flags: FlagValues, flag: string): string | undefined {
 		if (budget === undefined) return undefined;
 		if (budget > 10_000_000) return 10_000_000;
 		return budget;
+	}
+
+	function buildSopImport(flags: FlagValues, inputPath: string | undefined, common: BaseCommand & { providerFormat: ProviderFormat }, diagnostics: string[]): SopImportCommand | undefined {
+		if (!inputPath) {
+			diagnostics.push("missing required argument: <path> to SKILL.md file");
+			return undefined;
+		}
+		const outputDir = stringFlag(flags, "--output-dir") ?? "sop";
+		return {
+			kind: "sop.import",
+			inputPath,
+			outputDir,
+			format: common.format,
+			...(common.outputPath ? { outputPath: common.outputPath } : {}),
+		};
+	}
+
+	function buildSopDeposit(flags: FlagValues, common: BaseCommand & { providerFormat: ProviderFormat }, diagnostics: string[]): SopDepositCommand | undefined {
+		const sopDir = stringFlag(flags, "--sop-dir") ?? "sop";
+		const skillBankPath = stringFlag(flags, "--skill-bank");
+		const force = flags["--force"] === true;
+		return {
+			kind: "sop.deposit",
+			sopDir,
+			format: common.format,
+			...(common.outputPath ? { outputPath: common.outputPath } : {}),
+			...(skillBankPath ? { skillBankPath } : {}),
+			...(force ? { force } : {}),
+		};
+	}
+
+	function parseSopImportArgs(args: string[], diagnostics: string[]): { flags: FlagValues; positional?: string } {
+		const flagArgs: string[] = [];
+		let positional: string | undefined;
+		for (let index = 0; index < args.length; index += 1) {
+			const value = args[index];
+			if (value?.startsWith("--")) {
+				flagArgs.push(value);
+				if (!booleanFlags.has(value)) {
+					const next = args[index + 1];
+					if (next !== undefined) {
+						flagArgs.push(next);
+						index += 1;
+					}
+				}
+				continue;
+			}
+			if (!positional) {
+				positional = value;
+				continue;
+			}
+			diagnostics.push(`unexpected argument ${value}`);
+		}
+		const flags = parseFlags(flagArgs, diagnostics);
+		return { flags, ...(positional ? { positional } : {}) };
 	}

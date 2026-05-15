@@ -218,6 +218,7 @@ export function appendCompactionEntry(session: AgentSession, options: AppendComp
 		role: "user",
 		content: formatCompactionSummary(options.summary),
 		contentBlocks: [{ type: "text", text: formatCompactionSummary(options.summary) }],
+		cache: true,
 	};
 	const entry: CompactionSessionEntry = {
 		id: options.id ?? createEntryId(),

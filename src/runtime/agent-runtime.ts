@@ -23,6 +23,7 @@ export interface AgentRuntimeOptions {
 	eventObserver?: TraceEventObserver;
 	toolResultStorageDir?: string;
 	onCompactionMemory?: (facts: string[], session: AgentSession, compactionEntryId: string) => void | Promise<void>;
+	contextTransform?: (messages: ModelMessage[], session: AgentSession) => ModelMessage[] | Promise<ModelMessage[]>;
 }
 
 export class AgentRuntime implements AgentRuntimeExecutor {
@@ -70,6 +71,7 @@ export class AgentRuntime implements AgentRuntimeExecutor {
 			...(this.options.getFollowUpMessages ? { getFollowUpMessages: this.options.getFollowUpMessages } : {}),
 			...(this.options.eventObserver ? { eventObserver: this.options.eventObserver } : {}),
 			...(this.options.onCompactionMemory ? { onCompactionMemory: this.options.onCompactionMemory } : {}),
+		...(this.options.contextTransform ? { contextTransform: this.options.contextTransform } : {}),
 		};
 		return withTimeout((timeoutSignal) => runAgentLoop(session, loopOptions, timeoutSignal), minDefined(session.task.timeoutMs, session.agent.runtime.timeoutMs), signal);
 	}

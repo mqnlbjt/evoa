@@ -48,8 +48,14 @@ export async function runAgentLoop(
 	const budgetTracker = initBudgetTracker(session);
 
 	const maxTurns = session.agent.runtime.maxTurns;
+	let pendingFollowUps: FollowUpMessage[] = [];
 	while (maxTurns === undefined || session.turnCount < maxTurns) {
 		throwIfRuntimeAborted(signal);
+		if (pendingFollowUps.length > 0) {
+			for (const message of pendingFollowUps) appendUserEntry(session, message, createId(), now());
+			recordEvent(session, options, event(createId, now, "follow_up", session, followUpPayload(pendingFollowUps, session.turnCount)));
+			pendingFollowUps = [];
+		}
 		session.turnCount += 1;
 		const tools = modelTools(session, options.toolRegistry);
 		const budget = resolveContextBudget(session.agent);
@@ -126,6 +132,11 @@ export async function runAgentLoop(
 		}));
 
 		const purpose = modelPurpose(session, tools.length);
+		const streamCallbacks = {
+			onTextDelta: (delta: string) => {
+				recordEvent(session, options, event(createId, now, "assistant_delta", session, { delta }));
+			},
+		};
 		const request: ModelRequest = {
 			agent: session.agent,
 			task: session.task,
@@ -135,6 +146,8 @@ export async function runAgentLoop(
 			routing: { inputTokenEstimate: contextView.tokenEstimate, ...(tools.length > 0 ? { toolCount: tools.length } : {}) },
 			sessionId: session.id,
 			...(tools.length > 0 ? { tools } : {}),
+			stream: true,
+			streamCallbacks,
 		};
 
 		let modelStartedAt = now();
@@ -186,13 +199,11 @@ export async function runAgentLoop(
 		}
 
 		if (!lastResponse.toolCalls || lastResponse.toolCalls.length === 0) {
-			const followUpMessages = await stoppedTurnFollowUp(session, lastResponse, options);
-			if (followUpMessages.length > 0) {
-				for (const message of followUpMessages) appendUserEntry(session, message, createId(), now());
-				recordEvent(session, options, event(createId, now, "follow_up", session, followUpPayload(followUpMessages, session.turnCount)));
-				continue;
+			pendingFollowUps = await stoppedTurnFollowUp(session, lastResponse, options);
+			if (pendingFollowUps.length === 0) {
+				return { answer: lastResponse.text ?? "", trace: session.trace };
 			}
-			return { answer: lastResponse.text ?? "", trace: session.trace };
+			continue;
 		}
 
 		if (!options.toolRegistry) {

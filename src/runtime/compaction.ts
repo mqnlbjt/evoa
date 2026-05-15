@@ -322,6 +322,41 @@ interface DropOldestRoundResult {
 	remaining: SessionEntry[];
 }
 
+export function summarizeCompletedSession(session: AgentSession): boolean {
+	const entries = ensureSessionEntries(session);
+	const systemEntries = entries.filter((e) => e.kind === "system");
+	const nonSystem = entries.filter((e) => e.kind !== "system");
+	if (nonSystem.length < 2) return false;
+
+	const userEntries = nonSystem.filter((e) => e.kind === "user");
+	const lastUser = userEntries[userEntries.length - 1];
+	const lastAssistant = lastOfKind(nonSystem, "assistant");
+	if (!lastAssistant) return false;
+
+	const question = lastUser ? `Question: ${limitSummaryText(lastUser.message.content)}` : "";
+	const answer = `Answer: ${limitSummaryText(lastAssistant.message.content)}`;
+	const summary = [question, answer].filter(Boolean).join("\n") || "Task completed.";
+
+	const tokenEstimateBefore = estimateMessageTokens(entries.map((e) => e.message));
+	session.entries = [...systemEntries];
+	session.messages = systemEntries.map((e) => e.message);
+	appendCompactionEntry(session, {
+		summary,
+		sourceEntryIds: nonSystem.map((e) => e.id),
+		keptRecentEntryIds: [],
+		tokenEstimateBefore,
+		tokenEstimateAfter: estimateTextTokens(summary),
+	});
+	return true;
+}
+
+function lastOfKind(entries: SessionEntry[], kind: SessionEntry["kind"]): SessionEntry | undefined {
+	for (let i = entries.length - 1; i >= 0; i -= 1) {
+		if (entries[i]?.kind === kind) return entries[i];
+	}
+	return undefined;
+}
+
 function dropOldestRound(entries: SessionEntry[]): DropOldestRoundResult {
 	if (entries.length === 0) return { dropped: 0, remaining: entries };
 	const firstAssistantIdx = entries.findIndex((e) => e.kind === "assistant");

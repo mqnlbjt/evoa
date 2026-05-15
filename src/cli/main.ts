@@ -1,4 +1,4 @@
-import { handleBenchmark, handleChat, handleDiff, handleEvolve, handleMcpDiagnostics, handleMcpStatus, handleModelsDiscover, handleReplay, handleRun, writeOptionalFiles, type CliDeps, type CliResult } from "./commands.js";
+import { handleBenchmark, handleChat, handleDiff, handleEvolve, handleMcpDiagnostics, handleMcpStatus, handleModelsDiscover, handleReplay, handleRun, handleSopDeposit, handleSopImport, handleSopList, handleSopRun, writeOptionalFiles, type CliDeps, type CliResult } from "./commands.js";
 import { handleTui } from "./tui-command.js";
 import { formatJson } from "./format.js";
 import { configPathFromArgs, helpText, parseCliArgs, type CliCommand } from "./args.js";
@@ -49,6 +49,10 @@ async function runCommand(command: CliCommand, deps: CliDeps): Promise<CliResult
 	if (command.kind === "evolve") return handleEvolve(command, deps);
 	if (command.kind === "replay") return handleReplay(command, deps);
 	if (command.kind === "diff") return handleDiff(command, deps);
+	if (command.kind === "sop.list") return handleSopList(command, deps);
+	if (command.kind === "sop.run") return handleSopRun(command, deps);
+	if (command.kind === "sop.import") return handleSopImport(command, deps);
+	if (command.kind === "sop.deposit") return handleSopDeposit(command, deps);
 	return { exitCode: 0, human: helpText(), json: { ok: true, command: "help" } };
 }
 

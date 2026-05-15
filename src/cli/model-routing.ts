@@ -3,6 +3,7 @@ import type { ProviderConfig, ProviderFormat } from "../models/provider-types.js
 import type { ModelClient } from "../models/types.js";
 import { ModelRegistry, type ModelRegistryOptions } from "../models/registry.js";
 import { DeterministicModelRouter, RegistryModelClientFactory, RoutingModelClient } from "../models/router.js";
+import { DebugModelClient } from "../models/debug-client.js";
 import { memoryToolNames } from "../memory/tools.js";
 import type { AgentSpec } from "../specs.js";
 import type { BenchmarkCommand, ChatCommand, EvolveCommand, RunCommand } from "./args.js";
@@ -31,7 +32,13 @@ export function effectiveAgentForCommand(agent: AgentSpec, command: ModelRoutedC
 
 export function createRoutedModelClient(command: ModelRoutedCommand, deps: ModelRoutingDeps, agent: AgentSpec): ModelClient {
 	const registry = createRoutedModelRegistry(command, deps, agent);
-	return new RoutingModelClient(new DeterministicModelRouter(), new RegistryModelClientFactory(registry));
+	const client = new RoutingModelClient(new DeterministicModelRouter(), new RegistryModelClientFactory(registry));
+	const debugDir = process.env["EVOLVING_AGENT_DEBUG_LLM"];
+	if (debugDir) {
+		const logPath = debugDir.endsWith(".jsonl") ? debugDir : `${debugDir}/llm-calls.jsonl`;
+		return new DebugModelClient(client, logPath);
+	}
+	return client;
 }
 
 export function createRoutedModelRegistry(command: ModelRoutedCommand, deps: ModelRoutingDeps, agent: AgentSpec): ModelRegistry {
