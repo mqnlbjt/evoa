@@ -5,7 +5,7 @@
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"bin": {
-		"evoa": "./dist/cli.js"
+		"evoa": "dist/cli.js"
 	},
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
@@ -48,7 +48,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/mqnlbjt/evoa.git"
+		"url": "git+https://github.com/mqnlbjt/evoa.git"
 	},
 	"homepage": "https://github.com/mqnlbjt/evoa#readme",
 	"bugs": {

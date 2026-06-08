@@ -1,4 +1,4 @@
-# evoa
+# @wqqqyyz/evoa
 
 > A lightweight, evaluable, verifiable, and self-evolving general-purpose Agent runtime.
 
@@ -23,28 +23,24 @@ AgentRuntime ---- AgentSession ---- RuntimeEvent Trace
 ## Quick Start
 
 ```bash
-# Install dependencies
-npm install
+# Quick start (no install needed)
+npx @wqqqyyz/evoa chat "Hello, what can you do?"
 
-# Build
-npm run build
-
-# Start a chat session (requires a model endpoint)
-npx evoa chat "Hello, what can you do?"
-
-# Start interactive chat
-npx evoa chat
+# Or install globally
+npm install -g @wqqqyyz/evoa
+evoa chat
 
 # Run a benchmark
-npx evoa benchmark --suite <suite.json> --agent <agent.json>
+npx @wqqqyyz/evoa benchmark --suite <suite.json> --agent <agent.json>
 
 # Compare two agent versions
-npx evoa evolve --baseline-agent <baseline.json> --candidate-agent <candidate.json> --suite <suite.json>
+npx @wqqqyyz/evoa evolve --baseline-agent <baseline.json> --candidate-agent <candidate.json> --suite <suite.json>
 
 # Launch TUI
-npx evoa tui
+npx @wqqqyyz/evoa tui
 
-# Run tests
+# Run tests (from source)
+npm install
 npm test
 ```
 
