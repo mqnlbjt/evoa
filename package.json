@@ -1,7 +1,6 @@
 {
 	"name": "evoa",
 	"version": "0.1.0",
-	"private": true,
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -10,6 +9,7 @@
 	},
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
+		"prepublishOnly": "npm run build",
 		"test": "npx vitest --run",
 		"test:unit": "npx vitest --run --reporter=verbose",
 		"typecheck": "tsc --noEmit"
@@ -30,5 +30,28 @@
 	"engines": {
 		"node": ">=20.0.0"
 	},
-	"description": "A lightweight, evaluable, verifiable, and self-evolving general-purpose Agent runtime."
+	"description": "A lightweight, evaluable, verifiable, and self-evolving general-purpose Agent runtime.",
+	"files": [
+		"dist/**/*.js",
+		"dist/**/*.d.ts",
+		"dist/**/*.js.map"
+	],
+	"keywords": [
+		"agent",
+		"ai-agent",
+		"agent-runtime",
+		"benchmark",
+		"evolution",
+		"llm",
+		"typescript"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mqnlbjt/evoa.git"
+	},
+	"homepage": "https://github.com/mqnlbjt/evoa#readme",
+	"bugs": {
+		"url": "https://github.com/mqnlbjt/evoa/issues"
+	}
 }

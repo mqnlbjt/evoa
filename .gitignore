@@ -5,3 +5,10 @@ coverage/
 *.log
 .ace-tool/
 .evolving-agent/
+temp/
+esbuild
+fix-run.ts
+test-repro.ts
+test-status.ts
+test-exec
+review-*.md
