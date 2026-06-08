@@ -146,10 +146,13 @@ export interface SubagentSpec {
 export interface TaskFixture {
 	path: string;
 	content: string;
+	setup?: string;
+	teardown?: string;
+	permissions?: "readonly" | "readwrite";
 }
 
 export interface TaskScoringSpec {
-	method: "exact" | "rubric" | "command" | "custom" | "llm-judge";
+	method: "exact" | "rubric" | "command" | "custom" | "llm-judge" | "artifact";
 	maxScore?: number;
 	config?: Record<string, unknown>;
 }

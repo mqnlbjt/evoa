@@ -1,0 +1,107 @@
+{
+  "id": "tool-orchestration",
+  "name": "工具编排",
+  "description": "多步工具调用依赖链：后续输出依赖前一步结果，需顺序使用3+种工具",
+  "tasks": [
+    {
+      "id": "orchestration-data-report",
+      "type": "general",
+      "title": "多源销售数据聚合分析",
+      "prompt": "你是数据分析师。请分析 /workspace/sales/ 下的数据：\n1. 找出 Q3（7-9月）销售额最高的品类\n2. 计算该品类 Q3 的毛利率（(销售额-成本)/销售额）\n3. 生成一份分析报告保存到 /workspace/report.md\n\n注意：数据分散在 orders.csv（订单明细）和 products.csv（产品成本）两个文件中，需要关联查询。",
+      "fixtures": [
+        {
+          "path": "workspaces/orchestration-data-report/orders.csv",
+          "content": "order_id,date,category,product,quantity,unit_price,total\n1001,2024-07-05,电子产品,无线耳机,50,299,14950\n1002,2024-07-12,家居,台灯,30,89,2670\n1003,2024-07-22,电子产品,手机壳,200,29,5800\n1004,2024-08-03,电子产品,无线耳机,80,299,23920\n1005,2024-08-15,家居,书架,15,399,5985\n1006,2024-08-28,运动,跑步鞋,25,599,14975\n1007,2024-09-01,电子产品,充电器,120,49,5880\n1008,2024-09-10,家居,落地灯,40,199,7960\n1009,2024-09-18,电子产品,手机壳,180,29,5220\n1010,2024-09-25,运动,瑜伽垫,60,129,7740\n1011,2024-10-01,电子产品,无线耳机,45,299,13455\n1012,2024-10-10,家居,台灯,35,89,3115"
+        },
+        {
+          "path": "workspaces/orchestration-data-report/products.csv",
+          "content": "category,product,cost_per_unit\n电子产品,无线耳机,180\n电子产品,手机壳,8\n电子产品,充电器,22\n家居,台灯,45\n家居,书架,210\n家居,落地灯,110\n运动,跑步鞋,350\n运动,瑜伽垫,65"
+        }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "电子产品", "weight": 2, "required": true },
+            { "description": "毛利率", "weight": 2, "required": true },
+            { "description": "Q3", "weight": 1 },
+            { "description": "report.md", "weight": 2 },
+            { "description": "0.39", "weight": 3, "required": true }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["report.md"]
+    },
+    {
+      "id": "orchestration-config-migration",
+      "type": "general",
+      "title": "多环境配置迁移验证",
+      "prompt": "你是运维工程师。需要将开发环境的配置迁移到生产环境：\n1. 读取 /workspace/configs/dev/ 下所有 .yaml 配置文件\n2. 检查每个配置项是否在 /workspace/configs/prod-template.yaml 中有对应占位符\n3. 对于缺失的占位符，列出清单\n4. 将 dev 配置值填入模板，生成 /workspace/configs/prod-generated.yaml\n5. 验证生成的 prod 配置没有遗留 {{PLACEHOLDER}} 标记\n\n注意：不能直接复制 dev 配置到 prod，必须从模板生成。",
+      "fixtures": [
+        {
+          "path": "workspaces/orchestration-config-migration/dev/database.yaml",
+          "content": "database:\n  host: 10.0.1.50\n  port: 5432\n  name: myapp_dev\n  pool_size: 10\n  ssl: false"
+        },
+        {
+          "path": "workspaces/orchestration-config-migration/dev/cache.yaml",
+          "content": "cache:\n  host: 10.0.1.51\n  port: 6379\n  ttl_seconds: 3600\n  max_memory_mb: 2048"
+        },
+        {
+          "path": "workspaces/orchestration-config-migration/dev/logging.yaml",
+          "content": "logging:\n  level: debug\n  output: stdout\n  file_path: /var/log/myapp/dev.log\n  max_size_mb: 100"
+        },
+        {
+          "path": "workspaces/orchestration-config-migration/prod-template.yaml",
+          "content": "database:\n  host: {{DB_HOST}}\n  port: {{DB_PORT}}\n  name: {{DB_NAME}}\n  pool_size: {{DB_POOL_SIZE}}\n  ssl: {{DB_SSL}}\ncache:\n  host: {{CACHE_HOST}}\n  port: {{CACHE_PORT}}\n  ttl_seconds: {{CACHE_TTL}}\n  max_memory_mb: {{CACHE_MAX_MEM}}\nlogging:\n  level: {{LOG_LEVEL}}\n  output: {{LOG_OUTPUT}}\n  file_path: {{LOG_FILE}}\n  max_size_mb: {{LOG_MAX_SIZE}}\n  alert_email: {{ALERT_EMAIL}}"
+        }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "prod-generated.yaml", "weight": 2, "required": true },
+            { "description": "ALERT_EMAIL", "weight": 3, "required": true },
+            { "description": "10.0.1.50", "weight": 1 },
+            { "description": "debug", "weight": 1 },
+            { "description": "{{", "weight": 3, "required": true }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["prod-generated.yaml"]
+    },
+    {
+      "id": "orchestration-bug-hunt",
+      "type": "general",
+      "title": "跨文件 Bug 定位与修复",
+      "prompt": "用户报告了一个 Bug：订单金额超过 1000 时应该打 9 折，但实际没有生效。\n\n请完成：\n1. 阅读 /workspace/app/order.py 理解订单处理逻辑\n2. 查看 /workspace/tests/test_order.py 中的测试用例\n3. 运行测试确认 Bug（用 bash 执行 python 命令）\n4. 定位 Bug 根因并修复\n5. 再次运行测试确保通过\n6. 将修复说明写入 /workspace/bugfix.md",
+      "fixtures": [
+        {
+          "path": "workspaces/orchestration-bug-hunt/app/order.py",
+          "content": "def calculate_total(items, discount_threshold=1000):\n    subtotal = sum(item['price'] * item['qty'] for item in items)\n    discount = 0\n    if subtotal > discount_threshold:\n        discount = subtotal * 0.1\n    return subtotal - discount\n\n\ndef apply_discount(amount):\n    if amount < 1000:\n        return amount * 0.9\n    return amount\n"
+        },
+        {
+          "path": "workspaces/orchestration-bug-hunt/tests/test_order.py",
+          "content": "from app.order import calculate_total, apply_discount\n\ndef test_no_discount_under_threshold():\n    items = [{'price': 100, 'qty': 2}]\n    assert calculate_total(items) == 200\n\ndef test_discount_over_threshold():\n    items = [{'price': 500, 'qty': 3}]\n    result = calculate_total(items)\n    expected = 1500 * 0.9\n    assert result == expected, f\"Expected {expected}, got {result}\"\n\ndef test_apply_discount_logic():\n    assert apply_discount(2000) == 1800\n    assert apply_discount(500) == 450\n\nif __name__ == '__main__':\n    test_no_discount_under_threshold()\n    test_discount_over_threshold()\n    test_apply_discount_logic()\n    print('All tests passed!')\n"
+        }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 8,
+        "config": {
+          "criteria": [
+            { "description": "bugfix.md", "weight": 1 },
+            { "description": "apply_discount", "weight": 3, "required": true },
+            { "description": "<", "weight": 2 },
+            { "description": "calculate_total", "weight": 2, "required": true }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["bugfix.md"]
+    }
+  ]
+}

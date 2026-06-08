@@ -1,21 +1,23 @@
 {
-	"name": "evolving-agent",
+	"name": "evoa",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"bin": {
-		"evolving-agent": "./dist/cli.js"
+		"evoa": "./dist/cli.js"
 	},
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
-		"test": "vitest --run",
+		"test": "npx vitest --run",
+		"test:unit": "npx vitest --run --reporter=verbose",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.29.0",
 		"better-sqlite3": "^12.9.0",
+		"esbuild": "^0.28.0",
 		"openai": "^6.34.0",
 		"yaml": "^2.8.4"
 	},
@@ -27,5 +29,6 @@
 	},
 	"engines": {
 		"node": ">=20.0.0"
-	}
+	},
+	"description": "A lightweight, evaluable, verifiable, and self-evolving general-purpose Agent runtime."
 }

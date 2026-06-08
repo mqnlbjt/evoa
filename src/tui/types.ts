@@ -1,8 +1,9 @@
+import type { EvolutionHistoryRecord } from "../evolution/history-store.js";
 import type { TraceEvent } from "../runtime/events.js";
 import type { TuiStatsSnapshot } from "./stats.js";
 
 export type TuiStatus = "idle" | "thinking" | "running_tool" | "done" | "error";
-export type TuiView = "chat" | "stats" | "trace";
+export type TuiView = "chat" | "stats" | "trace" | "evolve";
 export type ChatLogKind = "user" | "assistant" | "tool_call" | "tool_result" | "system" | "error" | "score";
 export type ChatLogSeverity = "info" | "success" | "warning" | "error";
 
@@ -67,6 +68,7 @@ export interface TuiStateSnapshot extends Omit<TuiStateOptions, "now" | "createI
 	runningTools: RunningToolEntry[];
 	trace: TraceEvent[];
 	contextUsage?: ContextUsage;
+	evolutionHistory: EvolutionHistoryRecord[];
 }
 
 export interface RenderContext {

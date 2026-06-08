@@ -1,0 +1,105 @@
+{
+  "id": "subtask-decomposition",
+  "name": "子任务拆分",
+  "description": "任务涉及多个独立模块，需用 subagent 并行处理并汇总结果",
+  "tasks": [
+    {
+      "id": "subtask-microservice-audit",
+      "type": "general",
+      "title": "多微服务配置审计",
+      "prompt": "你需要审计 /workspace/microservices/ 下三个微服务的配置文件，生成统一的合规报告 /workspace/compliance-report.md。\n\n三个微服务各自在独立目录：\n- user-service/（用户服务，包含 config.yaml + Dockerfile + env.list）\n- order-service/（订单服务，包含 config.yaml + Dockerfile + env.list）\n- payment-service/（支付服务，包含 config.yaml + Dockerfile + env.list）\n\n审计检查项：\n1. config.yaml 中是否有明文密码/token\n2. Dockerfile 是否使用了 latest 标签\n3. env.list 中是否有缺失的环境变量（跟 config.yaml 对照）\n\n提示：三个服务相互独立，可以使用 subagent 并行审计，然后汇总结果。",
+      "fixtures": [
+        { "path": "workspaces/subtask-microservice-audit/microservices/user-service/config.yaml", "content": "service:\n  name: user-service\n  port: 8001\ndatabase:\n  host: db.internal\n  user: user_svc\n  password: MyS3cret!P@ss\nredis:\n  host: redis.internal\n  port: 6379\nlogging:\n  level: info" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/user-service/Dockerfile", "content": "FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\nCMD [\"python\", \"app.py\"]" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/user-service/env.list", "content": "SERVICE_PORT=8001\nDB_HOST=db.internal\nDB_USER=user_svc\nDB_PASSWORD=MyS3cret!P@ss\nREDIS_HOST=redis.internal\nLOG_LEVEL=info" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/order-service/config.yaml", "content": "service:\n  name: order-service\n  port: 8002\ndatabase:\n  host: db.internal\n  user: order_svc\n  password: Ord3rP@ss!\nmessage_queue:\n  broker: kafka.internal:9092\n  topic: orders\nlogging:\n  level: info" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/order-service/Dockerfile", "content": "FROM node:latest\nWORKDIR /app\nCOPY package.json .\nRUN npm install\nCOPY . .\nCMD [\"node\", \"server.js\"]" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/order-service/env.list", "content": "SERVICE_PORT=8002\nDB_HOST=db.internal\nDB_USER=order_svc\nDB_PASSWORD=Ord3rP@ss!\nKAFKA_BROKER=kafka.internal:9092" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/payment-service/config.yaml", "content": "service:\n  name: payment-service\n  port: 8003\ndatabase:\n  host: db.internal\n  user: pay_svc\n  password: Paym3nt#S3cure\ngateway:\n  api_key: pk_live_abc123def456ghi789\n  endpoint: https://gateway.pay/internal\nredis:\n  host: redis.internal\nlogging:\n  level: warn" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/payment-service/Dockerfile", "content": "FROM golang:latest\nWORKDIR /app\nCOPY go.mod go.sum ./\nRUN go mod download\nCOPY . .\nRUN go build -o server\nCMD [\"./server\"]" },
+        { "path": "workspaces/subtask-microservice-audit/microservices/payment-service/env.list", "content": "SERVICE_PORT=8003\nDB_HOST=db.internal\nDB_USER=pay_svc\nGATEWAY_API_KEY=pk_live_abc123def456ghi789\nGATEWAY_ENDPOINT=https://gateway.pay/internal\nLOG_LEVEL=warn" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 12,
+        "config": {
+          "criteria": [
+            { "description": "compliance-report.md", "weight": 2, "required": true },
+            { "description": "明文密码", "weight": 2, "required": true },
+            { "description": "latest", "weight": 2, "required": true },
+            { "description": "api_key", "weight": 2, "required": true },
+            { "description": "DB_PASSWORD", "weight": 1 },
+            { "description": "order-service", "weight": 1 },
+            { "description": "payment-service", "weight": 1 },
+            { "description": "user-service", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["compliance-report.md"]
+    },
+    {
+      "id": "subtask-i18n-docs",
+      "type": "general",
+      "title": "多语言文档同步更新",
+      "prompt": "你的项目有三个语言版本的文档，分别位于：\n- /workspace/docs/en/（英文，源版本）\n- /workspace/docs/zh/（中文翻译）\n- /workspace/docs/ja/（日文翻译）\n\n英文版新增了一个 API 端点 `POST /api/v2/batch-process`，已写入 /workspace/docs/en/api.md。\n\n请完成：\n1. 阅读英文版的新增内容\n2. 将新增内容翻译并同步到中文版和日文版的 api.md 中\n3. 检查三个版本的文档结构是否一致（章节顺序、代码块数量）\n4. 将差异报告写入 /workspace/docs/sync-report.md\n\n提示：中文和日文翻译可以并行进行。",
+      "fixtures": [
+        { "path": "workspaces/subtask-i18n-docs/docs/en/api.md", "content": "# API Reference\n\n## Authentication\n\nAll requests require `Authorization: Bearer <token>` header.\n\n## Endpoints\n\n### GET /api/v1/users\n\nReturns a paginated list of users.\n\n**Response:**\n```json\n{\"users\": [...], \"total\": 100, \"page\": 1}\n```\n\n### POST /api/v1/orders\n\nCreate a new order.\n\n**Request Body:**\n```json\n{\"product_id\": \"P001\", \"quantity\": 3}\n```\n\n### POST /api/v2/batch-process\n\nSubmit a batch processing job. Supports CSV and JSON input.\n\n**Request Body:**\n```json\n{\"input_format\": \"csv\", \"file_url\": \"https://...\", \"callback_url\": \"https://...\"}\n```\n\n**Response:**\n```json\n{\"job_id\": \"job_abc123\", \"status\": \"queued\", \"estimated_seconds\": 120}\n```\n\n## Error Codes\n\n| Code | Description |\n|------|-------------|\n| 400 | Bad request |\n| 401 | Unauthorized |\n| 429 | Rate limited |" },
+        { "path": "workspaces/subtask-i18n-docs/docs/zh/api.md", "content": "# API 参考\n\n## 认证\n\n所有请求需要 `Authorization: Bearer <token>` 请求头。\n\n## 接口列表\n\n### GET /api/v1/users\n\n返回分页用户列表。\n\n**响应：**\n```json\n{\"users\": [...], \"total\": 100, \"page\": 1}\n```\n\n### POST /api/v1/orders\n\n创建新订单。\n\n**请求体：**\n```json\n{\"product_id\": \"P001\", \"quantity\": 3}\n```\n\n## 错误码\n\n| 代码 | 描述 |\n|------|------|\n| 400 | 请求错误 |\n| 401 | 未认证 |\n| 429 | 频率限制 |" },
+        { "path": "workspaces/subtask-i18n-docs/docs/ja/api.md", "content": "# API リファレンス\n\n## 認証\n\nすべてのリクエストに `Authorization: Bearer <token>` ヘッダーが必要です。\n\n## エンドポイント\n\n### GET /api/v1/users\n\nページングされたユーザーリストを返します。\n\n**レスポンス：**\n```json\n{\"users\": [...], \"total\": 100, \"page\": 1}\n```\n\n### POST /api/v1/orders\n\n新規注文を作成します。\n\n**リクエストボディ：**\n```json\n{\"product_id\": \"P001\", \"quantity\": 3}\n```\n\n## エラーコード\n\n| コード | 説明 |\n|------|------|\n| 400 | 不正なリクエスト |\n| 401 | 認証エラー |\n| 429 | レート制限 |" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "sync-report.md", "weight": 2, "required": true },
+            { "description": "batch-process", "weight": 2, "required": true },
+            { "description": "callback_url", "weight": 2, "required": true },
+            { "description": "job_id", "weight": 1 },
+            { "description": "批量处理", "weight": 1 },
+            { "description": "バッチ", "weight": 1 },
+            { "description": "v2", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["sync-report.md"]
+    },
+    {
+      "id": "subtask-cross-module-refactor",
+      "type": "general",
+      "title": "跨模块依赖分析与重构建议",
+      "prompt": "你需要分析 /workspace/legacy-app/ 下的三个独立模块，找出它们之间的不合理依赖关系，然后给出重构建议。\n\n三个模块：\n- auth/（认证模块：models.py, views.py, utils.py）\n- billing/（计费模块：invoice.py, calculator.py, gateway.py）\n- notification/（通知模块：email.py, sms.py, push.py）\n\n目前的问题是模块间有循环引用和跨层调用。请：\n1. 分析每个模块的 import 依赖\n2. 画出模块间的依赖关系\n3. 识别循环依赖和跨层调用\n4. 输出重构建议到 /workspace/refactor-plan.md\n\n提示：三个模块的分析可以并行进行。",
+      "fixtures": [
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/auth/models.py", "content": "from auth.utils import hash_password\nfrom billing.invoice import get_user_invoices\n\nclass User:\n    def __init__(self, username, password):\n        self.username = username\n        self.password_hash = hash_password(password)\n    \n    def get_billing_summary(self):\n        return get_user_invoices(self.username)\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/auth/utils.py", "content": "import hashlib\nfrom notification.email import send_welcome_email\n\ndef hash_password(password: str) -> str:\n    return hashlib.sha256(password.encode()).hexdigest()\n\ndef create_user(username: str, password: str):\n    user_hash = hash_password(password)\n    send_welcome_email(username)\n    return {\"username\": username, \"hash\": user_hash}\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/auth/views.py", "content": "from auth.models import User\nfrom auth.utils import create_user\n\ndef login_view(username, password):\n    user = User(username, password)\n    return {\"status\": \"ok\", \"user\": user.username}\n\ndef register_view(username, password):\n    return create_user(username, password)\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/billing/invoice.py", "content": "from billing.calculator import compute_total\nfrom notification.email import send_invoice_email\n\ndef get_user_invoices(username: str):\n    return [\n        {\"id\": \"INV-001\", \"amount\": 150.00},\n        {\"id\": \"INV-002\", \"amount\": 299.00},\n    ]\n\ndef generate_invoice(username: str, items: list):\n    total = compute_total(items)\n    send_invoice_email(username, total)\n    return {\"user\": username, \"total\": total}\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/billing/calculator.py", "content": "from auth.models import User\n\ndef compute_total(items: list) -> float:\n    return sum(item.get('price', 0) * item.get('qty', 1) for item in items)\n\ndef apply_user_discount(username: str, amount: float) -> float:\n    # Wrong: billing depends on auth models\n    user = User(username, \"\")\n    invoices = user.get_billing_summary()\n    if len(invoices) > 10:\n        return amount * 0.95\n    return amount\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/billing/gateway.py", "content": "def process_payment(amount: float, token: str) -> dict:\n    # Simulate payment gateway\n    return {\"status\": \"success\", \"transaction_id\": \"txn_abc\", \"amount\": amount}\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/notification/email.py", "content": "from billing.gateway import process_payment\n\ndef send_welcome_email(username: str):\n    # Simulate email sending\n    return {\"to\": username, \"template\": \"welcome\"}\n\ndef send_invoice_email(username: str, amount: float):\n    # Wrong: notification depends on billing gateway  \n    payment_status = process_payment(amount, \"token_xxx\")\n    return {\"to\": username, \"template\": \"invoice\", \"payment\": payment_status}\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/notification/sms.py", "content": "def send_sms(phone: str, message: str):\n    # Simulate SMS\n    return {\"to\": phone, \"status\": \"sent\"}\n" },
+        { "path": "workspaces/subtask-cross-module-refactor/legacy-app/notification/push.py", "content": "from notification.email import send_welcome_email\n\ndef send_push_notification(username: str, title: str, body: str):\n    # Send push, fallback to email\n    return {\"channel\": \"push\", \"user\": username, \"title\": title}\n\ndef onboard_user(username: str):\n    # Duplicates auth.utils.create_user logic\n    send_welcome_email(username)\n    send_push_notification(username, \"Welcome!\", \"Thanks for joining.\")\n    return {\"status\": \"ok\"}\n" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 12,
+        "config": {
+          "criteria": [
+            { "description": "refactor-plan.md", "weight": 2, "required": true },
+            { "description": "循环依赖", "weight": 3, "required": true },
+            { "description": "auth", "weight": 1 },
+            { "description": "billing", "weight": 1 },
+            { "description": "notification", "weight": 1 },
+            { "description": "跨层", "weight": 2 },
+            { "description": "billing.gateway", "weight": 1 },
+            { "description": "notification.email", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["refactor-plan.md"]
+    }
+  ]
+}

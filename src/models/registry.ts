@@ -1,5 +1,6 @@
 import { AnthropicModelClient } from "./anthropic-client.js";
 import { discoverOpenAICompatibleModels } from "./discovery.js";
+import { OpenAIChatModelClient } from "./openai-chat-client.js";
 import { OpenAIModelClient, type OpenAIResponsesClient } from "./openai-client.js";
 import type { ModelClient } from "./types.js";
 import type { ModelConfig, ProviderConfig, ProviderFormat } from "./provider-types.js";
@@ -96,6 +97,16 @@ export class ModelRegistry {
 			});
 		}
 
+		if (provider.format === "openai-chat") {
+			return new OpenAIChatModelClient({
+				...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
+				baseURL: provider.baseURL,
+				...(provider.headers ? { defaultHeaders: { ...provider.headers } } : {}),
+				...(model.maxOutputTokens !== undefined ? { maxOutputTokens: model.maxOutputTokens } : {}),
+				...(this.options.fetchFn ? { fetchFn: this.options.fetchFn } : {}),
+			});
+		}
+
 		return new AnthropicModelClient({
 			...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
 			baseURL: provider.baseURL,
@@ -136,7 +147,7 @@ function assertNonEmpty(value: string, label: string): void {
 }
 
 function assertSupportedFormat(format: ProviderFormat): void {
-	if (format !== "openai-responses" && format !== "anthropic-messages") {
+	if (format !== "openai-responses" && format !== "openai-chat" && format !== "anthropic-messages") {
 		throw new Error(`Unsupported provider format ${String(format)}`);
 	}
 }

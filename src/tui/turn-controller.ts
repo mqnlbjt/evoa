@@ -1,6 +1,7 @@
 import type { ChatServiceContext } from "../cli/chat-service.js";
 import { runChatTurn } from "../cli/chat-service.js";
 import { isAbortError } from "../runtime/timeout.js";
+import type { EvolutionHistoryRecord } from "../evolution/history-store.js";
 import type { TuiState } from "./state.js";
 import { handleSlashCommand } from "./slash-commands.js";
 import type { TuiView } from "./types.js";
@@ -12,6 +13,7 @@ export interface TuiTurnControllerOptions {
 	onStopRequested: () => void;
 	onViewChanged: (view: TuiView) => void;
 	onNewSessionRequested?: () => Promise<string>;
+	loadEvolutionHistory?: (historyPath: string) => Promise<EvolutionHistoryRecord[]>;
 }
 
 export class TuiTurnController {
@@ -55,7 +57,7 @@ export class TuiTurnController {
 			return;
 		}
 		const beforeView = this.options.state.snapshot().activeView;
-		const result = await handleSlashCommand(input, { state: this.options.state, chat: this.options.chat, stop: this.options.onStopRequested, ...(this.options.onNewSessionRequested ? { newSession: this.options.onNewSessionRequested } : {}) });
+		const result = await handleSlashCommand(input, { state: this.options.state, chat: this.options.chat, stop: this.options.onStopRequested, ...(this.options.onNewSessionRequested ? { newSession: this.options.onNewSessionRequested } : {}), ...(this.options.loadEvolutionHistory ? { loadEvolutionHistory: this.options.loadEvolutionHistory } : {}) });
 		const afterView = this.options.state.snapshot().activeView;
 		if (beforeView !== afterView) this.options.onViewChanged(afterView);
 		if (result.message) this.options.state.addSystemMessage(result.message);

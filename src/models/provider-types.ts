@@ -1,4 +1,4 @@
-export type ProviderFormat = "openai-responses" | "anthropic-messages";
+export type ProviderFormat = "openai-responses" | "openai-chat" | "anthropic-messages";
 
 export interface ProviderConfig {
 	id: string;

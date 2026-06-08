@@ -1,0 +1,111 @@
+{
+  "id": "long-range-memory",
+  "name": "长程记忆",
+  "description": "关键信息在任务早期出现，经历 10+ 步噪音操作后才能用到，考验信息跨轮次保留",
+  "tasks": [
+    {
+      "id": "memory-incident-response",
+      "type": "general",
+      "title": "安全事件应急响应链",
+      "prompt": "你收到了一条安全告警。请按照应急响应流程处理：\n\n1. 首先，阅读 /workspace/incident/alert.json 了解告警详情（这一步会告诉你攻击者的 IP 和攻击类型）\n2. 然后，依次检查以下日志文件，确认攻击路径：\n   - /workspace/incident/logs/firewall-01.log（防火墙日志，200 行）\n   - /workspace/incident/logs/firewall-02.log（防火墙日志，200 行）\n   - /workspace/incident/logs/nginx-access-01.log（Web 日志，300 行）\n   - /workspace/incident/logs/nginx-access-02.log（Web 日志，300 行）\n   - /workspace/incident/logs/nginx-access-03.log（Web 日志，300 行）\n   - /workspace/incident/logs/app-audit.log（应用审计日志，200 行）\n   - /workspace/incident/logs/db-slow-query.log（数据库慢查询日志，150 行）\n   - /workspace/incident/logs/sys-auth.log（系统认证日志，200 行）\n   - /workspace/incident/logs/sys-cron.log（定时任务日志，150 行）\n   - /workspace/incident/logs/sys-messages.log（系统消息日志，200 行）\n3. 最后，结合第一步的告警信息，写出完整的攻击链分析和处置建议到 /workspace/incident/response-report.md\n\n注意：日志文件很多，但你要始终记住第一步告警中的关键信息（IP、攻击类型），在海量日志中只追踪与告警相关的线索。",
+      "fixtures": [
+        { "path": "workspaces/memory-incident-response/incident/alert.json", "content": "{\n  \"alert_id\": \"SEC-2024-0618-0042\",\n  \"severity\": \"critical\",\n  \"timestamp\": \"2024-06-18T03:15:00Z\",\n  \"source_ip\": \"185.220.101.34\",\n  \"attack_type\": \"SQL Injection via login form\",\n  \"target\": \"api.example.com\",\n  \"initial_evidence\": \"Multiple 500 errors on POST /api/login with suspicious payloads containing UNION SELECT\"\n}" },
+        { "path": "workspaces/memory-incident-response/incident/logs/firewall-01.log", "content": "Jun 18 00:01:00 fw01 kernel: INPUT ACCEPT src=10.0.1.50 dst=10.0.1.1 proto=tcp dpt=443\nJun 18 00:05:00 fw01 kernel: INPUT ACCEPT src=10.0.1.51 dst=10.0.1.1 proto=tcp dpt=443\n...(195 行正常流量日志)...\nJun 18 02:50:00 fw01 kernel: INPUT ACCEPT src=185.220.101.34 dst=10.0.1.1 proto=tcp dpt=443\nJun 18 02:55:00 fw01 kernel: INPUT ACCEPT src=185.220.101.34 dst=10.0.1.1 proto=tcp dpt=443\nJun 18 03:00:00 fw01 kernel: INPUT ACCEPT src=185.220.101.34 dst=10.0.1.1 proto=tcp dpt=443" },
+        { "path": "workspaces/memory-incident-response/incident/logs/firewall-02.log", "content": "Jun 18 01:00:00 fw02 kernel: INPUT DROP src=10.0.3.100 dst=10.0.1.1 proto=tcp dpt=22\nJun 18 01:05:00 fw02 kernel: INPUT ACCEPT src=10.0.2.50 dst=10.0.1.1 proto=tcp dpt=443\n...(195 行正常流量日志)...\nJun 18 03:10:00 fw02 kernel: INPUT ACCEPT src=185.220.101.34 dst=10.0.1.1 proto=tcp dpt=443\nJun 18 03:11:00 fw02 kernel: INPUT ACCEPT src=185.220.101.34 dst=10.0.1.1 proto=tcp dpt=443\nJun 18 03:12:00 fw02 kernel: INPUT ACCEPT src=185.220.101.34 dst=10.0.1.1 proto=tcp dpt=443" },
+        { "path": "workspaces/memory-incident-response/incident/logs/nginx-access-01.log", "content": "10.0.1.50 - - [18/Jun/2024:00:01:00] \"GET / HTTP/1.1\" 200 1024\n...(295 行正常访问)...\n185.220.101.34 - - [18/Jun/2024:02:58:00] \"GET /login HTTP/1.1\" 200 512" },
+        { "path": "workspaces/memory-incident-response/incident/logs/nginx-access-02.log", "content": "185.220.101.34 - - [18/Jun/2024:03:05:00] \"POST /api/login HTTP/1.1\" 500 128\n185.220.101.34 - - [18/Jun/2024:03:05:30] \"POST /api/login HTTP/1.1\" 500 256\n185.220.101.34 - - [18/Jun/2024:03:06:00] \"POST /api/login HTTP/1.1\" 500 512\n...(295 行其他日志，含大量正常流量)..." },
+        { "path": "workspaces/memory-incident-response/incident/logs/nginx-access-03.log", "content": "185.220.101.34 - - [18/Jun/2024:03:08:00] \"POST /api/login HTTP/1.1\" 200 2048\n185.220.101.34 - - [18/Jun/2024:03:08:05] \"GET /api/users?role=admin HTTP/1.1\" 200 4096\n185.220.101.34 - - [18/Jun/2024:03:08:10] \"POST /api/admin/export HTTP/1.1\" 200 8192\n185.220.101.34 - - [18/Jun/2024:03:09:00] \"GET /api/admin/users/all HTTP/1.1\" 200 32768\n...(295 行其他日志)..." },
+        { "path": "workspaces/memory-incident-response/incident/logs/app-audit.log", "content": "2024-06-18 03:00:00 [INFO] User login: admin (success)\n2024-06-18 03:05:00 [ERROR] SQL error in /api/login: unrecognized token: \"UNION\"\n2024-06-18 03:05:30 [ERROR] SQL error in /api/login: unrecognized token: \"UNION\"\n2024-06-18 03:06:00 [ERROR] SQL error in /api/login: unrecognized token: \"UNION\"\n...(195 行正常审计日志)...\n2024-06-18 03:08:00 [INFO] User login: admin (success, MFA bypass detected)\n2024-06-18 03:08:05 [INFO] User admin accessed /api/users?role=admin\n2024-06-18 03:08:10 [INFO] User admin exported data: all users\n2024-06-18 03:09:00 [INFO] User admin downloaded full user table (32768 bytes)" },
+        { "path": "workspaces/memory-incident-response/incident/logs/db-slow-query.log", "content": "2024-06-18 00:15:00 [SLOW] SELECT * FROM orders JOIN items... (3200ms)\n...(145 行慢查询，均为正常业务查询)...\n2024-06-18 03:08:10 [SLOW] SELECT * FROM users WHERE 1=1 UNION SELECT... (5500ms)" },
+        { "path": "workspaces/memory-incident-response/incident/logs/sys-auth.log", "content": "Jun 18 00:00:00 server sshd[1001]: Accepted publickey for admin from 10.0.1.50\nJun 18 00:01:00 server sudo: admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl restart nginx\n...(195 行正常认证日志)...\nJun 18 03:08:00 server app-auth: WARNING: admin login without MFA from 185.220.101.34\nJun 18 03:09:00 server app-auth: WARNING: admin session hijack detected, unusual User-Agent" },
+        { "path": "workspaces/memory-incident-response/incident/logs/sys-cron.log", "content": "Jun 18 01:00:00 server CRON[2001]: (root) CMD (/usr/local/bin/backup.sh)\nJun 18 02:00:00 server CRON[3001]: (root) CMD (/usr/local/bin/cleanup.sh)\n...(145 行正常定时任务)..." },
+        { "path": "workspaces/memory-incident-response/incident/logs/sys-messages.log", "content": "Jun 18 00:00:00 server systemd: Starting Cleanup of Temporary Directories...\nJun 18 00:00:05 server systemd: Started Cleanup of Temporary Directories.\n...(195 行正常系统消息)..." }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 12,
+        "config": {
+          "criteria": [
+            { "description": "response-report.md", "weight": 2, "required": true },
+            { "description": "185.220.101.34", "weight": 3, "required": true },
+            { "description": "SQL注入", "weight": 2, "required": true },
+            { "description": "MFA", "weight": 2, "required": true },
+            { "description": "UNION", "weight": 1 },
+            { "description": "数据泄露", "weight": 1 },
+            { "description": "admin", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["response-report.md"]
+    },
+    {
+      "id": "memory-market-research",
+      "type": "general",
+      "title": "多阶段市场调研项目",
+      "prompt": "你需要完成一个市场调研项目，分为三个不连续的阶段。\n\n**阶段 1：数据收集（现在）**\n阅读 /workspace/research/brief.md 了解调研目标，记住关键信息：目标行业、竞品列表、评估维度。\n\n**阶段 2：噪音干扰**\n/workspace/research/misc/ 下有 12 个无关文件（市场报告、新闻、技术文章），你需要浏览它们并确认与本次调研无关，可以跳过。\n\n**阶段 3：分析输出**\n根据阶段 1 记住的调研目标，读取 /workspace/research/data/ 下的真实数据文件，完成分析报告 /workspace/research/final-report.md。\n\n注意：阶段 3 不会再提醒你调研目标，你必须依靠阶段 1 读取的信息来完成最终报告。",
+      "fixtures": [
+        { "path": "workspaces/memory-market-research/research/brief.md", "content": "# 市场调研简报\n\n## 调研目标\n为「智能仓储机器人」产品做竞品分析。\n\n## 目标行业\n物流仓储自动化（Warehouse Automation）\n\n## 评估维度\n1. 产品定价策略\n2. 技术差异化（导航方式：激光 SLAM vs 视觉 SLAM）\n3. 部署周期\n4. 客户满意度\n\n## 重点竞品\n- RoboLogix-3000（德国）\n- QuickPick-AI（美国）\n- SmartCarry-Pro（日本）\n- 极智搬运王（中国）" },
+        { "path": "workspaces/memory-market-research/research/misc/blockchain_news.md", "content": "# 区块链行业周报\nDeFi 总锁仓量突破 1000 亿美元。ETH Layer2 方案持续增长。\n...与智能仓储无关..." },
+        { "path": "workspaces/memory-market-research/research/misc/weather_forecast.md", "content": "# 本周天气\n预计华南地区有强降雨，华东晴好。温度 25-35°C。" },
+        { "path": "workspaces/memory-market-research/research/misc/recipe_pasta.md", "content": "# 意面食谱\n材料：意面 200g，番茄酱 100g，罗勒叶少许。煮 8 分钟即可。" },
+        { "path": "workspaces/memory-market-research/research/misc/stock_weekly.md", "content": "# 股市周报\n上证指数本周上涨 2.3%。科技板块领涨，地产板块回调。" },
+        { "path": "workspaces/memory-market-research/research/misc/football_results.md", "content": "# 足球比分\n曼联 2:1 切尔西。曼城 3:0 阿森纳。欧冠决赛 6 月 1 日。" },
+        { "path": "workspaces/memory-market-research/research/misc/travel_guide.md", "content": "# 云南旅游攻略\n推荐路线：昆明-大理-丽江-香格里拉。最佳季节 4-5 月。" },
+        { "path": "workspaces/memory-market-research/research/misc/pet_care.md", "content": "# 宠物护理指南\n猫咪换毛季注意事项。狗狗疫苗接种时间表。" },
+        { "path": "workspaces/memory-market-research/research/misc/car_review.md", "content": "# 新车评测\n特斯拉 Model Y vs 比亚迪汉。续航、内饰、自动驾驶对比。" },
+        { "path": "workspaces/memory-market-research/research/misc/python_tutorial.md", "content": "# Python 教程\n装饰器详解。生成器与协程。异步 IO 模式。" },
+        { "path": "workspaces/memory-market-research/research/misc/movie_review.md", "content": "# 本月电影推荐\n科幻片《星际穿越 2》评分 8.5。动画片《熊猫传奇》适合全家观看。" },
+        { "path": "workspaces/memory-market-research/research/misc/coffee_guide.md", "content": "# 精品咖啡入门\n埃塞俄比亚耶加雪菲，中度烘焙，柑橘风味。手冲 92°C 水温。" },
+        { "path": "workspaces/memory-market-research/research/data/competitor_analysis.csv", "content": "product,vendor,country,nav_tech,price_usd,deploy_days,satisfaction\nRoboLogix-3000,RoboTech GmbH,Germany,激光SLAM,85000,14,4.2/5\nQuickPick-AI,PickLogic Inc,USA,视觉SLAM,72000,21,3.8/5\nSmartCarry-Pro,Nippon Robotics,Japan,激光SLAM,95000,10,4.5/5\n极智搬运王,智行科技,China,视觉SLAM,48000,7,4.0/5" },
+        { "path": "workspaces/memory-market-research/research/data/market_overview.csv", "content": "year,market_size_billion_usd,growth_rate,top_region,key_driver\n2022,18.5,12.3%,亚太,电商物流需求增长\n2023,21.2,14.6%,亚太,劳动力成本上升\n2024,24.8,17.0%,亚太,AI技术成熟\n2025E,29.1,17.3%,亚太,制造业回流" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 12,
+        "config": {
+          "criteria": [
+            { "description": "final-report.md", "weight": 2, "required": true },
+            { "description": "智能仓储", "weight": 2, "required": true },
+            { "description": "RoboLogix-3000", "weight": 2, "required": true },
+            { "description": "激光SLAM", "weight": 1 },
+            { "description": "视觉SLAM", "weight": 1 },
+            { "description": "竞品分析", "weight": 1 },
+            { "description": "极智搬运王", "weight": 1 },
+            { "description": "定价", "weight": 1 },
+            { "description": "部署周期", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["final-report.md"]
+    },
+    {
+      "id": "memory-customer-support",
+      "type": "general",
+      "title": "客户工单升级处理",
+      "prompt": "你是一名客服人员，需要处理一个复杂的客户投诉工单。\n\n**阶段 1：了解客户背景**\n阅读 /workspace/support/customer_profile.md 了解客户信息和历史记录。\n\n**阶段 2：处理大量噪音**\n/workspace/support/inbox/ 下有 20 个邮件模板文件（定价、功能说明、市场资料、技术文档）。你需要浏览找到其中与当前客户问题相关的 3 个模板。\n\n**阶段 3：读工单并处理**\n阅读 /workspace/support/ticket.md 了解当前投诉内容。\n\n**阶段 4：给出解决方案**\n综合阶段 1 的客户背景和阶段 2 的模板，编写个性化的回复邮件 /workspace/support/reply-email.md。\n\n关键提醒：回复中必须体现客户的历史订单信息和 VIP 等级（来自阶段 1），否则会被质检驳回。",
+      "fixtures": [
+        { "path": "workspaces/memory-customer-support/support/customer_profile.md", "content": "# 客户档案\n\n## 基本信息\n- 客户ID：CUST-8842\n- 公司：迅达物流集团\n- 联系人：张总（采购总监）\n- 注册日期：2019-03-15\n\n## VIP 等级：铂金会员（Platinum）\n- 年消费额：¥2,850,000\n- 累计订单数：347\n- 专属折扣：8.5 折\n- 专属客服代表：李明\n\n## 历史记录\n- 2024-02-10：订购 RobotLogix-3000 × 5 台，¥425,000\n- 2024-04-05：报修 RobotLogix-3000 SN#RL3K-0042，导航偏差\n- 2024-04-08：维修完成，更换激光雷达模块\n- 2024-06-01：续签年度维护合同，¥85,000/年" },
+        { "path": "workspaces/memory-customer-support/support/ticket.md", "content": "# 工单 #TKT-2024-0618\n\n## 状态：待处理\n\n## 客户：CUST-8842（迅达物流集团 - 张总）\n\n## 问题描述\n张总反馈：2024-04-08 维修的那台 RobotLogix-3000（SN#RL3K-0042），最近又出现了同样的导航偏差问题。\n\n张总表示非常不满：「花了 8.5 万买设备 + 8.5 万的维护合同，修了一次结果两个月又坏了。如果这次不能彻底解决，明年不会再续签维护合同，并且会考虑更换供应商。」\n\n## 客户诉求\n1. 希望派高级工程师现场诊断，不要远程处理\n2. 要求免费维修（认为在保修期内）\n3. 询问是否可以临时提供一台备用机\n\n## 内部备注\n- 该设备保修期到 2025-02-10（正常是 1 年，VIP 铂金客户自动延长至 13 个月）\n- 维护合同包含每年 2 次免费现场服务\n- 华东仓库有 RobotLogix-3000 备用机 1 台" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 12,
+        "config": {
+          "criteria": [
+            { "description": "reply-email.md", "weight": 2, "required": true },
+            { "description": "铂金", "weight": 2, "required": true },
+            { "description": "RL3K-0042", "weight": 2, "required": true },
+            { "description": "现场", "weight": 2, "required": true },
+            { "description": "备用机", "weight": 2, "required": true },
+            { "description": "保修", "weight": 1 },
+            { "description": "张总", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["reply-email.md"]
+    }
+  ]
+}

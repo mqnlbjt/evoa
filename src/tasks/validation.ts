@@ -1,7 +1,7 @@
 import type { TaskScoringSpec, TaskSpec, TaskType } from "../specs.js";
 
 const taskTypes = new Set<TaskType>(["coding", "tool", "general", "business"]);
-const scoringMethods = new Set<TaskScoringSpec["method"]>(["exact", "rubric", "command", "custom", "llm-judge"]);
+const scoringMethods = new Set<TaskScoringSpec["method"]>(["exact", "rubric", "command", "custom", "llm-judge", "artifact"]);
 
 export function validateTaskSpec(value: unknown): TaskSpec {
 	if (!isRecord(value)) throw new Error("task spec must be an object");
@@ -26,7 +26,7 @@ export function validateTaskSpec(value: unknown): TaskSpec {
 function validateScoring(value: unknown): asserts value is TaskScoringSpec {
 	if (!isRecord(value)) throw new Error("scoring is required");
 	if (!scoringMethods.has(value.method as TaskScoringSpec["method"])) {
-		throw new Error("scoring.method must be exact, rubric, command, custom, or llm-judge");
+		throw new Error("scoring.method must be exact, rubric, command, custom, llm-judge, or artifact");
 	}
 	if (value.maxScore !== undefined && (typeof value.maxScore !== "number" || value.maxScore <= 0)) {
 		throw new Error("scoring.maxScore must be a positive number");
@@ -54,6 +54,16 @@ function validateScoringConfig(method: TaskScoringSpec["method"], config: Record
 				throw new Error("scoring.config.passThreshold must be a number between 0 and 1");
 			}
 			if (config.modelAlias !== undefined && typeof config.modelAlias !== "string") throw new Error("scoring.config.modelAlias must be a string");
+			break;
+		}
+		case "command": {
+			if (!config || typeof config.command !== "string" || config.command.trim().length === 0) throw new Error("command scoring requires config.command non-empty string");
+			if (config.exitCode !== undefined && (typeof config.exitCode !== "number" || !Number.isInteger(config.exitCode))) throw new Error("scoring.config.exitCode must be an integer");
+			if (config.timeoutMs !== undefined && (typeof config.timeoutMs !== "number" || config.timeoutMs <= 0)) throw new Error("scoring.config.timeoutMs must be a positive number");
+			break;
+		}
+		case "artifact": {
+			if (!config || typeof config.path !== "string" || config.path.trim().length === 0) throw new Error("artifact scoring requires config.path non-empty string");
 			break;
 		}
 	}

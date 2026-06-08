@@ -1,0 +1,73 @@
+{
+  "id": "exact-match",
+  "name": "精确匹配基准",
+  "description": "纯确定性 exact 评分基线套件，验证 Agent 基本回答能力",
+  "tasks": [
+    {
+      "id": "exact-simple-english",
+      "type": "general",
+      "title": "英文简单问题",
+      "prompt": "What is the capital of France? Answer with just the city name, nothing else.",
+      "scoring": {
+        "method": "exact",
+        "maxScore": 1,
+        "config": { "expected": "Paris" }
+      }
+    },
+    {
+      "id": "exact-simple-chinese",
+      "type": "general",
+      "title": "中文简单问题",
+      "prompt": "中国最长的河流是什么？只回答河流名称，不要加任何其他文字。",
+      "scoring": {
+        "method": "exact",
+        "maxScore": 1,
+        "config": { "expected": "长江" }
+      }
+    },
+    {
+      "id": "exact-case-sensitive",
+      "type": "general",
+      "title": "大小写敏感匹配",
+      "prompt": "输出以下字符串：HelloWorld（注意大小写）",
+      "scoring": {
+        "method": "exact",
+        "maxScore": 1,
+        "config": { "expected": "HelloWorld", "caseSensitive": true, "trim": true }
+      }
+    },
+    {
+      "id": "exact-whitespace-normalized",
+      "type": "general",
+      "title": "空白规范化匹配",
+      "prompt": "输出 ' pong ' 不加引号",
+      "scoring": {
+        "method": "exact",
+        "maxScore": 1,
+        "config": { "expected": "pong", "trim": true, "caseSensitive": false }
+      }
+    },
+    {
+      "id": "exact-math-result",
+      "type": "general",
+      "title": "数学计算结果",
+      "prompt": "Calculate 127 * 43. Answer with just the number.",
+      "scoring": {
+        "method": "exact",
+        "maxScore": 1,
+        "config": { "expected": "5461", "normalizeWhitespace": true }
+      }
+    },
+    {
+      "id": "exact-boolean-true",
+      "type": "general",
+      "title": "布尔真值返回",
+      "prompt": "Is 42 an even number? Reply only True or False.",
+      "scoring": {
+        "method": "exact",
+        "maxScore": 1,
+        "config": { "expected": "True", "caseSensitive": true }
+      }
+    }
+  ]
+}

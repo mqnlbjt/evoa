@@ -13,7 +13,7 @@ export interface ModelRoutingHints {
 
 export type ModelContentBlock =
 	| { type: "text"; text: string }
-	| { type: "reasoning"; text: string; provider?: string; format?: "openai-reasoning-content" | "anthropic-thinking" | "summary" | "unknown"; metadata?: Record<string, unknown> }
+	| { type: "reasoning"; text: string; signature?: string; provider?: string; format?: "openai-reasoning-content" | "anthropic-thinking" | "summary" | "unknown"; metadata?: Record<string, unknown> }
 	| { type: "tool_call"; id: string; name: string; input?: unknown }
 	| { type: "tool_result"; toolCallId: string; toolName?: string; content: string; isError?: boolean };
 
@@ -86,6 +86,7 @@ export interface ModelTiming {
 export interface ModelResponse {
 	text?: string;
 	reasoning?: string;
+	reasoningSignature?: string;
 	toolCalls?: ModelToolCall[];
 	usage?: ModelUsage;
 	timing?: ModelTiming;

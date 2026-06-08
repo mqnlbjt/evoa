@@ -1,0 +1,76 @@
+{
+  "id": "tool-bash",
+  "name": "Bash 命令执行",
+  "description": "评估 Agent 执行 bash 命令完成文件操作的能力",
+  "tasks": [
+    {
+      "id": "tool-bash-list-files",
+      "type": "tool",
+      "title": "列出文件并统计",
+      "prompt": "列出 /workspace/data/ 下的所有文件，统计文件总数和各扩展名（.csv, .json, .txt）的数量，将结果写入 /workspace/file-stats.md。",
+      "fixtures": [
+        { "path": "data/a.csv", "content": "id,name\n1,Alice" },
+        { "path": "data/b.csv", "content": "id,name\n2,Bob" },
+        { "path": "data/config.json", "content": "{\"version\": 1}" },
+        { "path": "data/readme.txt", "content": "This is a test directory." },
+        { "path": "data/notes.txt", "content": "Another text file." }
+      ],
+      "scoring": {
+        "method": "custom",
+        "maxScore": 10,
+        "config": {
+          "subscores": [
+            { "method": "artifact", "weight": 3, "config": { "path": "file-stats.md", "exists": true } },
+            { "method": "artifact", "weight": 3, "config": { "path": "file-stats.md", "contains": ["5", "csv", "json", "txt"] } },
+            { "method": "command", "weight": 4, "config": { "command": "test -f file-stats.md && wc -l < file-stats.md", "exitCode": 0, "stdoutContains": ["5"] } }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["file-stats.md"]
+    },
+    {
+      "id": "tool-bash-find-replace",
+      "type": "tool",
+      "title": "文本查找替换",
+      "prompt": "在 /workspace/project/ 下所有 .js 文件中，将字符串 'localhost:3000' 替换为 '${API_HOST}:${API_PORT}'，使用 sed 或等效命令完成。",
+      "fixtures": [
+        { "path": "project/app.js", "content": "const API = 'http://localhost:3000/api';\nconst WS = 'ws://localhost:3000/ws';\nconsole.log(API);\n" },
+        { "path": "project/utils.js", "content": "export const BASE_URL = 'http://localhost:3000';\nexport const TIMEOUT = 5000;\n" },
+        { "path": "project/test.js", "content": "const mockServer = 'http://localhost:3000';\n// This is a test file\n" }
+      ],
+      "scoring": {
+        "method": "command",
+        "maxScore": 10,
+        "config": {
+          "command": "grep -r 'localhost:3000' project/ && exit 1 || exit 0",
+          "exitCode": 0
+        }
+      }
+    },
+    {
+      "id": "tool-bash-json-transform",
+      "type": "tool",
+      "title": "JSON 数据转换",
+      "prompt": "将 /workspace/users.json 中的用户数据转换为 CSV 格式，包含 id,name,email,role 列。使用 jq 命令完成转换，将结果写入 /workspace/users.csv。",
+      "fixtures": [
+        {
+          "path": "users.json",
+          "content": "[\n  {\"id\": 1, \"name\": \"Alice\", \"email\": \"alice@example.com\", \"role\": \"admin\"},\n  {\"id\": 2, \"name\": \"Bob\", \"email\": \"bob@example.com\", \"role\": \"user\"},\n  {\"id\": 3, \"name\": \"Charlie\", \"email\": \"charlie@example.com\", \"role\": \"user\"},\n  {\"id\": 4, \"name\": \"Diana\", \"email\": \"diana@example.com\", \"role\": \"editor\"}\n]\n"
+        }
+      ],
+      "scoring": {
+        "method": "custom",
+        "maxScore": 10,
+        "config": {
+          "subscores": [
+            { "method": "artifact", "weight": 3, "config": { "path": "users.csv", "exists": true, "contains": ["id", "name", "email", "role", "Alice", "Bob", "Charlie", "Diana"] } },
+            { "method": "command", "weight": 2, "config": { "command": "wc -l < users.csv", "exitCode": 0, "stdoutContains": ["5"] } }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["users.csv"]
+    }
+  ]
+}

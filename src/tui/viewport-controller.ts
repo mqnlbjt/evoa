@@ -5,7 +5,7 @@ const PAGE_DOWN = "\x1b[6~";
 
 export class TuiViewportController {
 	private chatOffset = 0;
-	private readonly viewOffsets: Record<Exclude<TuiView, "chat">, number> = { stats: 0, trace: 0 };
+	private readonly viewOffsets: Record<Exclude<TuiView, "chat">, number> = { stats: 0, trace: 0, evolve: 0 };
 
 	logScrollOffset(): number {
 		return this.chatOffset;

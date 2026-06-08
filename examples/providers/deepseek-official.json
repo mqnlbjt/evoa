@@ -1,0 +1,6 @@
+{
+  "id": "deepseek",
+  "baseURL": "https://api.deepseek.com/v1",
+  "format": "openai-chat",
+  "apiKey": "${DEEPSEEK_API_KEY}"
+}

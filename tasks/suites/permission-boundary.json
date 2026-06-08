@@ -1,0 +1,91 @@
+{
+  "id": "permission-boundary",
+  "name": "权限边界",
+  "description": "某些工具被策略拦截，Agent 必须在受限条件下找到合法替代方案",
+  "tasks": [
+    {
+      "id": "permission-cleanup-without-rm",
+      "type": "general",
+      "title": "无 rm 权限下的文件清理",
+      "prompt": "你需要清理 /workspace/temp/ 目录下的过期文件以释放磁盘空间。\n\n清理规则：\n- 删除所有超过 7 天的临时文件（.tmp, .log, .cache 后缀）\n- 保留 7 天内的文件和所有 .conf 配置文件\n- 清理后生成清理报告 /workspace/cleanup-report.md\n\n重要限制：你无法使用 bash 命令（安全策略禁止了 shell 执行）。你必须用其他方式完成任务。\n\ntemp/ 目录当前内容：\n- session_20240601.tmp（15 天前）\n- session_20240610.tmp（6 天前）\n- app_error.log（10 天前）\n- app_access.log（3 天前）\n- nginx.cache（12 天前）\n- build_output.cache（4 天前）\n- redis.conf（配置文件，永久保留）\n- server.conf（配置文件，永久保留）\n- data_export.tmp（8 天前）",
+      "fixtures": [
+        { "path": "workspaces/permission-cleanup-without-rm/temp/session_20240601.tmp", "content": "SESSION_DATA|user=admin|timestamp=2024-06-01T10:00:00Z|data=expired" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/session_20240610.tmp", "content": "SESSION_DATA|user=operator|timestamp=2024-06-10T14:30:00Z|data=active" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/app_error.log", "content": "2024-06-06 03:15:00 [ERROR] Connection timeout to database\n2024-06-06 05:22:00 [ERROR] Failed to send email notification" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/app_access.log", "content": "2024-06-13 10:00:01 [INFO] GET /api/status 200\n2024-06-13 10:05:33 [INFO] POST /api/data 201" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/nginx.cache", "content": "CACHE_ENTRY|url=/index|expires=2024-06-02|size=45KB\nCACHE_ENTRY|url=/about|expires=2024-06-04|size=12KB" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/build_output.cache", "content": "BUILD_CACHE|target=main|timestamp=2024-06-12|hash=abc123def" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/redis.conf", "content": "port 6379\nbind 127.0.0.1\nmaxmemory 256mb\nmaxmemory-policy allkeys-lru" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/server.conf", "content": "server_name localhost\nlisten 8080\nworker_processes 4" },
+        { "path": "workspaces/permission-cleanup-without-rm/temp/data_export.tmp", "content": "EXPORT|date=2024-06-08|rows=15000|status=complete" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "cleanup-report.md", "weight": 2, "required": true },
+            { "description": "session_20240601", "weight": 2, "required": true },
+            { "description": "nginx.cache", "weight": 2, "required": true },
+            { "description": "session_20240610", "weight": 2, "required": true },
+            { "description": "redis.conf", "weight": 1 },
+            { "description": "write_file", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["cleanup-report.md"]
+    },
+    {
+      "id": "permission-system-health-check",
+      "type": "general",
+      "title": "受限环境下系统健康检查",
+      "prompt": "你需要检查 /workspace/infra/ 下配置的三台服务器的健康状态，并生成检查报告 /workspace/health-report.md。\n\n检查项目：\n1. 各服务器的配置文件是否语法正确\n2. 端口号是否在有效范围内（1-65535）\n3. 是否有重复的端口分配\n4. 内存配置值是否合理（不超过物理上限 8192MB）\n\n安全限制：\n- 禁止执行任何 bash 命令\n- 禁止使用 subagent 工具\n- 只能使用 read_file, write_file, edit_file, list_dir, find_files, grep\n\n配置目录 /workspace/infra/conf.d/ 下每个 .conf 代表一台服务器。",
+      "fixtures": [
+        { "path": "workspaces/permission-system-health-check/infra/conf.d/web-server.conf", "content": "# Web Server Configuration\nserver {\n    listen 80;\n    server_name example.com;\n    root /var/www/html;\n    max_memory_mb 1024;\n    worker_count 4;\n}" },
+        { "path": "workspaces/permission-system-health-check/infra/conf.d/api-server.conf", "content": "# API Server Configuration\nserver {\n    listen 8080;\n    server_name api.example.com;\n    backend_pool 4;\n    max_memory_mb 8192;\n    rate_limit 1000;\n}" },
+        { "path": "workspaces/permission-system-health-check/infra/conf.d/cache-server.conf", "content": "# Cache Server Configuration\nserver {\n    listen 80;\n    server_name cache.internal;\n    max_memory_mb 99999;\n    eviction_policy lru;\n    cluster_nodes 3;\n}" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 8,
+        "config": {
+          "criteria": [
+            { "description": "health-report.md", "weight": 2, "required": true },
+            { "description": "端口冲突", "weight": 2, "required": true },
+            { "description": "99999", "weight": 2, "required": true },
+            { "description": "重复", "weight": 1 },
+            { "description": "超出", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["health-report.md"]
+    },
+    {
+      "id": "permission-sensitive-data-masking",
+      "type": "general",
+      "title": "敏感数据脱敏处理",
+      "prompt": "你需要对 /workspace/user-data.json 中的用户数据做脱敏处理，输出到 /workspace/user-data-masked.json。\n\n脱敏规则：\n- 手机号：保留前 3 后 4，中间用 **** 替换\n- 身份证号：保留前 6 后 4，中间用 **** 替换\n- 银行卡号：只保留后 4 位，前面全用 **** 替换\n- 邮箱：保留 @ 前的前 2 个字符和域名，中间用 *** 替换\n\n安全策略：\n- 禁止使用 bash 执行任何 sed/awk/python 脚本\n- 必须用 read_file + write_file 或 edit_file 完成处理\n- 不能删除原始文件 user-data.json",
+      "fixtures": [
+        { "path": "workspaces/permission-sensitive-data-masking/user-data.json", "content": "[\n  {\n    \"id\": 1,\n    \"name\": \"张三\",\n    \"phone\": \"13812345678\",\n    \"id_card\": \"110101199001011234\",\n    \"bank_card\": \"6222021234567890123\",\n    \"email\": \"zhangsan@company.com\"\n  },\n  {\n    \"id\": 2,\n    \"name\": \"李四\",\n    \"phone\": \"13998765432\",\n    \"id_card\": \"310105198506152345\",\n    \"bank_card\": \"6228480012345678901\",\n    \"email\": \"lisi_work@enterprise.cn\"\n  },\n  {\n    \"id\": 3,\n    \"name\": \"王五\",\n    \"phone\": \"13611112222\",\n    \"id_card\": \"440106197712303456\",\n    \"bank_card\": \"6217001234567890123\",\n    \"email\": \"wangwu@startup.io\"\n  }\n]"
+      }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 8,
+        "config": {
+          "criteria": [
+            { "description": "user-data-masked.json", "weight": 2, "required": true },
+            { "description": "138****5678", "weight": 2, "required": true },
+            { "description": "110101****1234", "weight": 2, "required": true },
+            { "description": "zh***@company.com", "weight": 1 },
+            { "description": "****8901", "weight": 1 }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["user-data-masked.json"]
+    }
+  ]
+}

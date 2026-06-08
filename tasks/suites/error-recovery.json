@@ -1,0 +1,97 @@
+{
+  "id": "error-recovery",
+  "name": "错误恢复",
+  "description": "中间步骤包含资源缺失、格式损坏等障碍，考验 Agent 的错误检测与替代方案",
+  "tasks": [
+    {
+      "id": "error-recovery-corrupted-batch",
+      "type": "general",
+      "title": "损坏文件的批量处理",
+      "prompt": "你需要处理 /workspace/incoming/ 下的数据文件，汇总所有有效记录到 /workspace/merged.csv。\n\n注意：目录中有 8 个 CSV 文件，但不是每个都能正常读取：\n- 有的文件编码不是 UTF-8（可能是 GBK 或 Latin-1）\n- 有的文件列名不一致（如 'Name' vs 'name' vs 'CustomerName'）\n- 有的文件内容损坏（中间有二进制垃圾数据）\n\n跳过无法恢复的文件，将能处理的数据合并后按 name 字段排序输出。最后在 /workspace/processing-log.md 记录每个文件的处理状态（成功/跳过/原因）。",
+      "fixtures": [
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/valid_batch1.csv", "content": "name,amount,date\n张三,1500,2024-01-15\n李四,2300,2024-01-20\n王五,980,2024-02-01" },
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/valid_batch2.csv", "content": "CustomerName,Amount,Date\n赵六,3200,2024-02-10\n钱七,1800,2024-02-15\n孙八,4500,2024-03-01" },
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/garbled.csv", "content": "name,amount,date\n周九,1100,2024[BINARY_GARBAGE]FFFE00081A90FF0A00-03-10\n吴十,2800,2024-03-15" },
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/gbk_encoded.csv", "content": "name,amount,date\n郑十一,1900,2024-03-20\n冯十二,4100,2024-04-01" },
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/empty.csv", "content": "" },
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/only_header.csv", "content": "name,amount,date" },
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/malformed.csv", "content": "NOT A CSV FILE AT ALL\nSome random text here\nThis file was mistakenly placed in the incoming folder\nPlease ignore or handle gracefully\n===========" },
+        { "path": "workspaces/error-recovery-corrupted-batch/incoming/Name_case.csv", "content": "Name,Amount,TransactionDate\n陈十四,2700,2024-04-05\n褚十五,1600,2024-04-10" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "merged.csv", "weight": 2, "required": true },
+            { "description": "processing-log.md", "weight": 2, "required": true },
+            { "description": "张三", "weight": 1 },
+            { "description": "赵六", "weight": 1 },
+            { "description": "跳过", "weight": 2, "required": true },
+            { "description": "编码", "weight": 1 },
+            { "description": "损坏", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["merged.csv", "processing-log.md"]
+    },
+    {
+      "id": "error-recovery-api-degradation",
+      "type": "general",
+      "title": "API 降级场景处理",
+      "prompt": "你需要调用 /workspace/api.py 中的三个函数来收集产品信息并生成目录文件 /workspace/catalog.json。\n\napi.py 提供的函数：\n- get_product_list() — 获取产品 ID 列表\n- get_product_detail(pid) — 获取单个产品详情\n- get_product_reviews(pid) — 获取产品评价\n\n已知问题：\n- get_product_detail() 对某些产品会抛出异常（产品已下架）\n- get_product_reviews() 有 30% 概率返回空列表（服务不稳定）\n\n要求：\n1. 获取完整产品列表\n2. 对每个产品尝试获取详情，失败的标记为 \"discontinued\"\n3. 对每个产品尝试获取评价，失败的默认返回空列表\n4. 不能因为单个产品失败而中断整个流程\n5. 最终 catalog.json 必须包含所有产品（包括成功和失败的）",
+      "fixtures": [
+        { "path": "workspaces/error-recovery-api-degradation/api.py", "content": "\"\"\"Simulated product API with intermittent failures.\"\"\"\n\nPRODUCTS = {\n    \"P001\": {\"id\": \"P001\", \"name\": \"机械键盘\", \"price\": 599, \"stock\": 120},\n    \"P002\": {\"id\": \"P002\", \"name\": \"电竞鼠标\", \"price\": 299, \"stock\": 0},\n    \"P003\": None,  # 已下架\n    \"P004\": {\"id\": \"P004\", \"name\": \"4K显示器\", \"price\": 3499, \"stock\": 15},\n    \"P005\": {\"id\": \"P005\", \"name\": \"USB集线器\", \"price\": 89, \"stock\": 300},\n    \"P006\": None,  # 已下架\n    \"P007\": {\"id\": \"P007\", \"name\": \"降噪耳机\", \"price\": 899, \"stock\": 45},\n    \"P008\": {\"id\": \"P008\", \"name\": \"笔记本支架\", \"price\": 159, \"stock\": 200},\n}\n\nREVIEWS = {\n    \"P001\": [{\"user\": \"A\", \"rating\": 5, \"text\": \"手感极佳\"}],\n    \"P002\": [{\"user\": \"B\", \"rating\": 4, \"text\": \"响应快\"}],\n    \"P004\": [],\n    \"P005\": [{\"user\": \"C\", \"rating\": 3, \"text\": \"够用\"}, {\"user\": \"D\", \"rating\": 4, \"text\": \"性价比高\"}],\n    \"P007\": [{\"user\": \"E\", \"rating\": 5, \"text\": \"降噪效果好\"}],\n}\n\ndef get_product_list():\n    return list(PRODUCTS.keys())\n\ndef get_product_detail(pid: str):\n    import random\n    product = PRODUCTS.get(pid)\n    if product is None:\n        raise ValueError(f\"Product {pid} has been discontinued\")\n    return product\n\ndef get_product_reviews(pid: str):\n    import random\n    if random.random() < 0.3:\n        return []  # Simulate empty response\n    return REVIEWS.get(pid, [])\n" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "catalog.json", "weight": 2, "required": true },
+            { "description": "discontinued", "weight": 3, "required": true },
+            { "description": "P003", "weight": 1 },
+            { "description": "P006", "weight": 1 },
+            { "description": "P001", "weight": 1 },
+            { "description": "机械键盘", "weight": 1 },
+            { "description": "reviews", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["catalog.json"]
+    },
+    {
+      "id": "error-recovery-missing-deps",
+      "type": "general",
+      "title": "依赖缺失下的替代构建",
+      "prompt": "你需要将 /workspace/project/ 下的 Markdown 文档编译成静态网站。\n\n项目使用了一个名为 'md2web' 的构建工具，但环境中没有安装它。\n\n/workspace/project/ 中包含：\n- src/ 目录：5 个 Markdown 源文件\n- template.html：网站模板\n- build.sh：构建脚本（调用了 md2web，会失败）\n- config.json：网站配置\n\n要求：\n1. 尝试运行 build.sh，观察失败原因\n2. 识别出缺失的工具\n3. 寻找替代方案手动完成编译（可以用 Python 脚本、pandoc 或其他方法）\n4. 输出静态网站到 /workspace/project/out/ 目录\n5. 在 /workspace/project/build-workaround.md 中记录你的替代方案",
+      "fixtures": [
+        { "path": "workspaces/error-recovery-missing-deps/project/build.sh", "content": "#!/bin/bash\nset -e\necho \"Building site with md2web...\"\nmd2web build --source src/ --template template.html --output out/\necho \"Build complete!\"\n" },
+        { "path": "workspaces/error-recovery-missing-deps/project/config.json", "content": "{\n  \"site_name\": \"技术文档站\",\n  \"author\": \"DevTeam\",\n  \"language\": \"zh-CN\",\n  \"pages\": [\"index\", \"guide\", \"api\", \"faq\", \"changelog\"]\n}" },
+        { "path": "workspaces/error-recovery-missing-deps/project/template.html", "content": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n    <meta charset=\"UTF-8\">\n    <title>{{TITLE}} - 技术文档站</title>\n    <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n    <nav>{{NAV}}</nav>\n    <main>{{CONTENT}}</main>\n    <footer>© 2024 DevTeam</footer>\n</body>\n</html>" },
+        { "path": "workspaces/error-recovery-missing-deps/project/src/index.md", "content": "# 欢迎\n\n欢迎来到技术文档站。\n\n## 快速导航\n\n- [入门指南](guide.html)\n- [API 参考](api.html)\n- [常见问题](faq.html)\n- [更新日志](changelog.html)" },
+        { "path": "workspaces/error-recovery-missing-deps/project/src/guide.md", "content": "# 入门指南\n\n## 安装\n\n```bash\npip install myapp\n```\n\n## 快速开始\n\n```python\nfrom myapp import Client\nclient = Client()\nresult = client.run()\n```" },
+        { "path": "workspaces/error-recovery-missing-deps/project/src/api.md", "content": "# API 参考\n\n## Client 类\n\n### `__init__(host, port)`\n\n创建客户端实例。\n\n### `run(params)`\n\n执行任务并返回结果。" },
+        { "path": "workspaces/error-recovery-missing-deps/project/src/faq.md", "content": "# 常见问题\n\n## Q: 支持哪些平台？\n\nLinux, macOS, Windows。\n\n## Q: 如何升级？\n\n```bash\npip install --upgrade myapp\n```" },
+        { "path": "workspaces/error-recovery-missing-deps/project/src/changelog.md", "content": "# 更新日志\n\n## v2.1.0 (2024-06-15)\n\n- 新增批量处理功能\n- 修复内存泄漏问题\n\n## v2.0.0 (2024-03-01)\n\n- 重构 API 接口\n- 提升 50% 性能" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "out/", "weight": 2, "required": true },
+            { "description": "build-workaround.md", "weight": 2, "required": true },
+            { "description": "md2web", "weight": 2 },
+            { "description": "替代", "weight": 1 },
+            { "description": ".html", "weight": 2 },
+            { "description": "Python", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      }
+    }
+  ]
+}

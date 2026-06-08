@@ -1,7 +1,10 @@
+import { tmpdir } from "node:os";
 import type { AgentSpec, TaskSpec } from "../specs.js";
 import type { RunStore } from "../sessions/run-store.js";
 import type { TraceEvent } from "../runtime/events.js";
 import { abortMessage, abortReason, isAbortError, isRuntimeTimeoutError } from "../runtime/timeout.js";
+import type { FixtureManager } from "./fixture.js";
+import type { GraderContext } from "./graders/types.js";
 import type {
 	AgentRuntimeExecutor,
 	AgentTaskRunResult,
@@ -20,6 +23,12 @@ export interface BenchmarkRunnerOptions {
 	store?: RunStore;
 	now?: () => number;
 	createId?: () => string;
+	fixtureManager?: FixtureManager;
+	workspaceBaseDir?: string;
+	parallelism?: number;
+	retries?: number;
+	retryOn?: Array<"errored" | "timeout">;
+	graderContext?: GraderContext;
 }
 
 export class BenchmarkRunner {
@@ -28,6 +37,9 @@ export class BenchmarkRunner {
 	private readonly store: RunStore | undefined;
 	private readonly now: () => number;
 	private readonly createId: () => string;
+	private readonly fixtureManager: FixtureManager | undefined;
+	private readonly workspaceBaseDir: string;
+	private readonly graderContext: GraderContext | undefined;
 
 	constructor(options: BenchmarkRunnerOptions) {
 		this.runtime = options.runtime;
@@ -35,14 +47,25 @@ export class BenchmarkRunner {
 		this.store = options.store;
 		this.now = options.now ?? Date.now;
 		this.createId = options.createId ?? (() => crypto.randomUUID());
+		this.fixtureManager = options.fixtureManager;
+		this.workspaceBaseDir = options.workspaceBaseDir ?? tmpdir();
+		this.graderContext = options.graderContext;
 	}
 
 	async runSuite(agent: AgentSpec, suite: BenchmarkSuite, signal?: AbortSignal): Promise<SuiteRunResult> {
 		const runs: AgentTaskRunResult[] = [];
+		let workspaceDir: string | undefined;
 		try {
 			for (const task of suite.tasks) {
-				const run = await this.runTaskWithoutClosing(agent, task, signal, false);
+				if (this.fixtureManager) {
+					workspaceDir = await this.fixtureManager.setup(task, this.workspaceBaseDir);
+				}
+				const context = buildGraderContext(this.graderContext, workspaceDir);
+				const run = await this.runTaskWithoutClosing(agent, task, signal, false, context);
 				runs.push(run);
+				if (workspaceDir && this.fixtureManager) {
+					await this.fixtureManager.teardown(workspaceDir);
+				}
 			}
 			const result: SuiteRunResult = {
 				agent,
@@ -53,15 +76,29 @@ export class BenchmarkRunner {
 			await this.store?.saveSuiteRun(result);
 			return result;
 		} finally {
+			if (workspaceDir && this.fixtureManager) {
+				await this.fixtureManager.cleanup(workspaceDir);
+			}
 			await this.runtime.close?.();
 		}
 	}
 
 	async runTask(agent: AgentSpec, task: TaskSpec, signal?: AbortSignal): Promise<AgentTaskRunResult> {
-		return this.runTaskWithoutClosing(agent, task, signal, true);
+		let workspaceDir: string | undefined;
+		if (this.fixtureManager) {
+			workspaceDir = await this.fixtureManager.setup(task, this.workspaceBaseDir);
+		}
+		const context = buildGraderContext(this.graderContext, workspaceDir);
+		return this.runTaskWithoutClosing(agent, task, signal, true, context);
 	}
 
-	private async runTaskWithoutClosing(agent: AgentSpec, task: TaskSpec, signal: AbortSignal | undefined, closeRuntime: boolean): Promise<AgentTaskRunResult> {
+	private async runTaskWithoutClosing(
+		agent: AgentSpec,
+		task: TaskSpec,
+		signal: AbortSignal | undefined,
+		closeRuntime: boolean,
+		graderCtx?: GraderContext,
+	): Promise<AgentTaskRunResult> {
 		const runId = this.createId();
 		const startedAt = this.now();
 		const trace: TraceEvent[] = [this.event("run_start", agent, task, { agent, task })];
@@ -74,7 +111,15 @@ export class BenchmarkRunner {
 		try {
 			output = await this.runtime.runTask(agent, task, signal);
 			trace.push(...(output.trace ?? []));
-			score = await this.grader.grade(agent, task, output);
+			if (graderCtx) {
+				const augmentedOutput = { ...output };
+				if (this.graderContext?.artifacts) {
+					augmentedOutput.artifacts = { ...this.graderContext.artifacts, ...(output.artifacts ?? {}) };
+				}
+				score = await this.grader.grade(agent, task, augmentedOutput);
+			} else {
+				score = await this.grader.grade(agent, task, output);
+			}
 			status = score.passed ? "passed" : "failed";
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
@@ -177,4 +222,15 @@ function createEmptyTypeSummary(): BenchmarkTypeSummary {
 		totalScore: 0,
 		maxScore: 0,
 	};
+}
+
+function buildGraderContext(base: GraderContext | undefined, workspaceDir: string | undefined): GraderContext | undefined {
+	if (!base && !workspaceDir) return undefined;
+	const ctx: GraderContext = {};
+	if (base?.modelClient) ctx.modelClient = base.modelClient;
+	if (base?.modelRouter) ctx.modelRouter = base.modelRouter;
+	if (base?.artifacts) ctx.artifacts = base.artifacts;
+	if (workspaceDir) ctx.workspaceDir = workspaceDir;
+	else if (base?.workspaceDir) ctx.workspaceDir = base.workspaceDir;
+	return ctx;
 }

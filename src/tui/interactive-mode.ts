@@ -1,5 +1,6 @@
 import type { ChatCommand, TuiCommand } from "../cli/args.js";
 import { startNewChatSession, type ChatServiceDeps } from "../cli/chat-service.js";
+import { JsonlEvolutionHistoryStore } from "../evolution/history-store.js";
 import { InputEditor } from "./input-editor.js";
 import { TuiRenderScheduler } from "./render-scheduler.js";
 import type { Terminal } from "./terminal.js";
@@ -47,7 +48,11 @@ export class InteractiveMode {
 				onRenderRequested: () => this.renderScheduler?.request(),
 				onStopRequested: () => this.stop(),
 				onViewChanged: (view) => this.viewport.reset(view),
-				onNewSessionRequested: async () => {
+					loadEvolutionHistory: async (historyPath: string) => {
+						const store = new JsonlEvolutionHistoryStore(historyPath);
+						return store.readRecords();
+					},
+					onNewSessionRequested: async () => {
 					const sessionId = startNewChatSession(session.chat);
 					resetTuiStateForChat(session.state, session.chat, { command: this.options.command, deps: this.options.deps, ...(this.options.now ? { now: this.options.now } : {}), onTraceEvent: () => this.renderScheduler?.request() });
 					this.viewport.reset("chat");

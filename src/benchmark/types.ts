@@ -88,6 +88,28 @@ export interface TaskExecutionOutput {
 	answer?: string;
 	artifacts?: Record<string, string>;
 	trace?: TraceEvent[];
+	filesCreated?: string[];
+	filesModified?: string[];
+	exitCode?: number;
+	toolCallsSummary?: {
+		total: number;
+		byName: Record<string, number>;
+		denied: number;
+		errors: number;
+	};
+}
+
+export interface AgentRuntimeExecutor {
+	runTask(agent: AgentSpec, task: TaskSpec, signal?: AbortSignal): Promise<TaskExecutionOutput>;
+	close?(): Promise<void>;
+}
+
+export interface TaskGrader {
+	grade(agent: AgentSpec, task: TaskSpec, output: TaskExecutionOutput): Promise<ScoreResult>;
+}
+
+export interface TaskGraderOptions {
+	modelClient: ModelClient | undefined;
 }
 
 export interface AgentRuntimeExecutor {

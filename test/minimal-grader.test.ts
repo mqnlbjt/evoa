@@ -163,9 +163,15 @@ describe("CompositeTaskGrader", () => {
 			const rubric = await new CompositeTaskGrader().grade(agent, rubricContainsTask(["pong"]), { answer: "pong" });
 			expect(rubric.passed).toBe(true);
 
-			const unsupported = await new CompositeTaskGrader().grade(agent, { ...exactTask({ expected: "x" }), scoring: { method: "command" } }, { answer: "x" });
+			const unsupported = await new CompositeTaskGrader().grade(agent, { ...exactTask({ expected: "x" }), scoring: { method: "nonexistent" as never } }, { answer: "x" });
 			expect(unsupported.passed).toBe(false);
 			expect(unsupported.reason).toContain("not yet supported");
+		});
+
+		it("returns error for command grader without command config", async () => {
+			const result = await new CompositeTaskGrader().grade(agent, { ...exactTask({ expected: "x" }), scoring: { method: "command" } as never }, { answer: "x" });
+			expect(result.passed).toBe(false);
+			expect(result.reason).toContain("command grader requires config.command");
 		});
 	});
 });

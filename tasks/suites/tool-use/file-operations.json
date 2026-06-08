@@ -1,0 +1,67 @@
+{
+  "id": "tool-files",
+  "name": "文件读写操作",
+  "description": "评估 Agent 的文件读写和目录操作能力",
+  "tasks": [
+    {
+      "id": "tool-files-create-structure",
+      "type": "tool",
+      "title": "创建目录结构",
+      "prompt": "在 /workspace/ 下创建以下项目目录结构：\nsrc/\n  components/\n  utils/\n  styles/\ntests/\n  unit/\n  integration/\ndocs/\n\n在每个叶子目录中放一个 .gitkeep 文件。",
+      "fixtures": [],
+      "scoring": {
+        "method": "command",
+        "maxScore": 10,
+        "config": {
+          "command": "test -d src/components && test -d src/utils && test -d src/styles && test -d tests/unit && test -d tests/integration && test -d docs && test -f src/components/.gitkeep && test -f src/utils/.gitkeep && test -f src/styles/.gitkeep && test -f tests/unit/.gitkeep && test -f tests/integration/.gitkeep && test -f docs/.gitkeep && echo 'OK'",
+          "exitCode": 0,
+          "stdoutContains": ["OK"]
+        }
+      }
+    },
+    {
+      "id": "tool-files-merge-csv",
+      "type": "tool",
+      "title": "合并 CSV 文件",
+      "prompt": "将 /workspace/sales/ 下所有 CSV 文件合并为 /workspace/all-sales.csv。去重依据 order_id 列。结果按 date 列升序排列。",
+      "fixtures": [
+        { "path": "sales/jan.csv", "content": "order_id,date,amount,region\nORD001,2024-01-05,1000,华北\nORD002,2024-01-12,2000,华东\nORD003,2024-01-20,1500,华南" },
+        { "path": "sales/feb.csv", "content": "order_id,date,amount,region\nORD004,2024-02-03,3000,华北\nORD002,2024-01-12,2000,华东\nORD005,2024-02-15,2500,西南" },
+        { "path": "sales/mar.csv", "content": "order_id,date,amount,region\nORD006,2024-03-08,1800,东北\nORD007,2024-03-22,2200,华中" }
+      ],
+      "scoring": {
+        "method": "custom",
+        "maxScore": 10,
+        "config": {
+          "subscores": [
+            { "method": "artifact", "weight": 3, "config": { "path": "all-sales.csv", "exists": true, "contains": ["ORD001", "ORD005", "ORD007"] } },
+            { "method": "artifact", "weight": 3, "config": { "path": "all-sales.csv", "exists": true, "regex": "^order_id,date,amount,region" } },
+            { "method": "command", "weight": 4, "config": { "command": "wc -l < all-sales.csv", "exitCode": 0, "stdoutContains": ["6", "7"] } }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["all-sales.csv"]
+    },
+    {
+      "id": "tool-files-config-template",
+      "type": "tool",
+      "title": "基于模板生成配置",
+      "prompt": "读取 /workspace/template.config.json 模板，根据 /workspace/envs.json 生成每个环境的配置文件：\n- /workspace/config/dev.json\n- /workspace/config/staging.json\n- /workspace/config/prod.json\n\n配置应包含模板中的所有字段，但 database.host 和 log.level 需根据环境替换。",
+      "fixtures": [
+        { "path": "template.config.json", "content": "{\n  \"app\": { \"name\": \"myapp\", \"version\": \"1.0.0\" },\n  \"server\": { \"port\": 8080, \"host\": \"0.0.0.0\" },\n  \"database\": { \"host\": \"localhost\", \"port\": 5432, \"name\": \"myapp\" },\n  \"log\": { \"level\": \"info\", \"format\": \"json\" }\n}" },
+        { "path": "envs.json", "content": "{\n  \"dev\": { \"database\": { \"host\": \"dev-db.local\" }, \"log\": { \"level\": \"debug\" } },\n  \"staging\": { \"database\": { \"host\": \"staging-db.internal\" }, \"log\": { \"level\": \"info\" } },\n  \"prod\": { \"database\": { \"host\": \"prod-db.cluster\" }, \"log\": { \"level\": \"warn\" } }\n}" }
+      ],
+      "scoring": {
+        "method": "command",
+        "maxScore": 10,
+        "config": {
+          "command": "test -f config/dev.json && test -f config/staging.json && test -f config/prod.json && grep -q 'dev-db.local' config/dev.json && grep -q 'staging-db.internal' config/staging.json && grep -q 'prod-db.cluster' config/prod.json && grep -q 'debug' config/dev.json && grep -q 'warn' config/prod.json && echo 'OK'",
+          "exitCode": 0,
+          "stdoutContains": ["OK"]
+        }
+      },
+      "expectedArtifacts": ["config/dev.json", "config/staging.json", "config/prod.json"]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-import type { ModelMessage } from "../models/types.js";
+import type { ModelContentBlock, ModelMessage } from "../models/types.js";
 import { calibrateTokenEstimate, effectiveInputTokenLimit, estimateMessageTokens, isOverContextBudget, type ResolvedContextBudget } from "./budget.js";
-import { ensureSessionEntries, type AgentSession, type CompactionSessionEntry, type SessionEntry } from "./session.js";
+import { ensureSessionEntries, type AgentSession, type CompactionSessionEntry, type SessionEntry, type ToolResultSessionEntry } from "./session.js";
 
 export interface BuildContextViewOptions {
 	budget: ResolvedContextBudget;
@@ -101,7 +101,8 @@ export function findSafeCutPoint(entries: SessionEntry[], budget: ResolvedContex
 }
 
 function buildContextViewFromEntries(sessionEntries: SessionEntry[], entries: SessionEntry[], options: BuildContextViewOptions): ContextView {
-	const baseMessages = entries.map((entry) => entry.message);
+	const normalized = normalizeToolPairOrder(entries);
+	const baseMessages = stripDanglingToolCalls(normalized.map((entry) => entry.message));
 	const messages = injectMemoryMessages(baseMessages, options);
 	const tokenEstimate = estimateMessageTokens(messages);
 	const includedEntryIds = entries.map((entry) => entry.id);
@@ -112,7 +113,7 @@ function buildContextViewFromEntries(sessionEntries: SessionEntry[], entries: Se
 		messages,
 		includedEntryIds,
 		omittedEntryIds,
-		compactionEntryIds: entries.filter((entry) => entry.kind === "compaction").map((entry) => entry.id),
+		compactionEntryIds: normalized.filter((entry) => entry.kind === "compaction").map((entry) => entry.id),
 		tokenEstimate,
 		messagesPreview: previewMessages(messages),
 		...(options.memoryContextItemIds ? { memoryContext: options.memoryContextItemIds } : {}),
@@ -123,6 +124,65 @@ function buildContextViewFromEntries(sessionEntries: SessionEntry[], entries: Se
 			usageFraction: tokenEstimate / options.budget.maxInputTokens,
 		},
 	};
+}
+
+function normalizeToolPairOrder(entries: SessionEntry[]): SessionEntry[] {
+	const output: SessionEntry[] = [];
+	let i = 0;
+	while (i < entries.length) {
+		const entry = entries[i]!;
+		if (entry.kind === "assistant" && assistantHasToolCalls(entry.message)) {
+			const callIds = new Set(
+				(entry.message.contentBlocks ?? [])
+					.filter((block): block is Extract<ModelContentBlock, { type: "tool_call" }> => block.type === "tool_call")
+					.map((block) => block.id),
+			);
+			output.push(entry);
+			i += 1;
+			const displaced: SessionEntry[] = [];
+			const toolResults: SessionEntry[] = [];
+			while (i < entries.length) {
+				const next = entries[i]!;
+				if (next.kind === "tool_result") {
+					const resultId = (next as ToolResultSessionEntry).message.toolCallId ?? (next as ToolResultSessionEntry).result?.call.id;
+					if (resultId && callIds.has(resultId)) {
+						toolResults.push(next);
+						callIds.delete(resultId);
+						i += 1;
+						continue;
+					}
+				}
+				if (next.kind === "assistant" && assistantHasToolCalls(next.message)) break;
+				displaced.push(next);
+				i += 1;
+			}
+			output.push(...toolResults);
+			output.push(...displaced);
+		} else {
+			output.push(entry);
+			i += 1;
+		}
+	}
+	return output;
+}
+
+function stripDanglingToolCalls(messages: ModelMessage[]): ModelMessage[] {
+	const toolResultIds = new Set<string>();
+	for (const message of messages) {
+		if (message.role === "tool" || (message.role === "user" && message.contentBlocks?.some((b) => b.type === "tool_result"))) {
+			for (const block of message.contentBlocks ?? []) {
+				if (block.type === "tool_result") toolResultIds.add(block.toolCallId);
+			}
+			if (message.toolCallId) toolResultIds.add(message.toolCallId);
+		}
+	}
+	if (toolResultIds.size === 0) return messages;
+	return messages.map((message) => {
+		if (message.role !== "assistant" || !message.contentBlocks?.some((b) => b.type === "tool_call")) return message;
+		const filtered = message.contentBlocks.filter((block) => block.type !== "tool_call" || toolResultIds.has(block.id));
+		if (filtered.length === message.contentBlocks.length) return message;
+		return { ...message, contentBlocks: filtered };
+	});
 }
 
 function applyTokenEstimate(view: ContextView, entries: SessionEntry[], session: AgentSession): void {

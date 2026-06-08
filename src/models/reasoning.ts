@@ -38,15 +38,18 @@ export function resolveReasoningPolicy(model: ModelSpec, defaultStyle: Reasoning
 }
 
 export function shouldReturnReasoning(policy: ReasoningPolicy, toolCalls: ModelToolCall[]): boolean {
-	if (!policy.enabled || policy.returnContent === "never") return false;
+	if (policy.returnContent === "never") return false;
 	if (policy.returnContent === "always") return true;
-	return toolCalls.length > 0 || policy.providerStyle === "deepseek" || policy.providerStyle === "chat-compatible";
+	return policy.enabled || toolCalls.length > 0 || policy.providerStyle === "deepseek" || policy.providerStyle === "chat-compatible";
 }
 
 export function shouldSendReasoningHistory(policy: ReasoningPolicy, toolCalls: Array<Extract<ModelContentBlock, { type: "tool_call" }>>): boolean {
-	if (!policy.enabled || policy.sendHistory === "never") return false;
+	// DeepSeek/chat-compatible providers require reasoning_content in all subsequent
+	// turns when tool calls are involved; it is safely ignored otherwise.
+	if (policy.providerStyle === "deepseek" || policy.providerStyle === "chat-compatible") return true;
+	if (policy.sendHistory === "never") return false;
 	if (policy.sendHistory === "always") return true;
-	return toolCalls.length > 0 && (policy.providerStyle === "deepseek" || policy.providerStyle === "chat-compatible");
+	return policy.enabled;
 }
 
 export function reasoningFormat(policy: ReasoningPolicy): Extract<ModelContentBlock, { type: "reasoning" }>["format"] {

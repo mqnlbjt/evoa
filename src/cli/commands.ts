@@ -13,6 +13,8 @@ import { JsonlEvolutionHistoryStore } from "../evolution/history-store.js";
 import { createEvolutionReport, formatEvolutionReportMarkdown } from "../evolution/report.js";
 import type { EvolutionCandidate } from "../evolution/types.js";
 import { verifyEvolutionComparison } from "../verification/verifier.js";
+import { loadDeterministicCandidateGeneratorFromFile } from "../evolution/deterministic-generator-loader.js";
+import type { EvolutionHistoryRecord } from "../evolution/history-store.js";
 import type { AgentTaskRunResult, SuiteRunResult } from "../benchmark/types.js";
 import { ModelRegistry, type ModelRegistryOptions } from "../models/registry.js";
 import { loadTaskSpecFromFile } from "../tasks/loader.js";
@@ -237,6 +239,14 @@ export async function handleSopRun(command: SopRunCommand, deps: CliDeps): Promi
 }
 
 export async function handleEvolve(command: EvolveCommand, deps: CliDeps): Promise<CliResult> {
+	if (command.listHistory && command.historyPath) return handleEvolveHistory(command);
+	if (command.autoIterations !== undefined && command.generatePath && command.baselineAgentPath && command.suitePath) return handleEvolveAuto(command, deps);
+	if (command.generatePath && command.baselineAgentPath && command.suitePath) return handleEvolveGenerate(command, deps);
+
+	if (!command.baselineAgentPath || !command.candidateAgentPath || !command.suitePath) {
+		throw new Error("evolve requires either --history --list, --generate, --auto, or --baseline-agent + --candidate-agent + --suite");
+	}
+
 	const baselineBundle = await loadAgentBundle(command.baselineAgentPath);
 	const candidateBundle = await loadAgentBundle(command.candidateAgentPath);
 	const baselineAgent = effectiveAgentForCommand(baselineBundle.agent, command);
@@ -269,6 +279,127 @@ export async function handleEvolve(command: EvolveCommand, deps: CliDeps): Promi
 		human: formatEvolutionHuman(comparison, verification),
 		...(command.reportPath ? { files: [{ path: command.reportPath, content: command.reportFormat === "markdown" ? formatEvolutionReportMarkdown(report) : `${JSON.stringify(report, null, 2)}\n` }] } : {}),
 	};
+}
+
+async function handleEvolveHistory(command: EvolveCommand): Promise<CliResult> {
+	if (!command.historyPath) throw new Error("--history is required for history mode");
+	const store = new JsonlEvolutionHistoryStore(command.historyPath);
+	const records = await store.readRecords();
+	if (command.listHistory) {
+		return {
+			exitCode: 0,
+			json: { ok: true, command: "evolve", mode: "history", count: records.length, records },
+			human: formatEvolutionHistoryHuman(records),
+		};
+	}
+	return {
+		exitCode: 0,
+		human: formatEvolutionHistoryHuman(records),
+		json: { ok: true, command: "evolve", mode: "history", count: records.length, records },
+	};
+}
+
+async function handleEvolveGenerate(command: EvolveCommand, deps: CliDeps): Promise<CliResult> {
+	if (!command.baselineAgentPath || !command.suitePath || !command.generatePath) throw new Error("--baseline-agent, --suite, --generate are required");
+	const baselineBundle = await loadAgentBundle(command.baselineAgentPath);
+	const baselineAgent = effectiveAgentForCommand(baselineBundle.agent, command);
+	const suite = await loadBenchmarkSuiteFromFile(command.suitePath);
+	const generator = await loadDeterministicCandidateGeneratorFromFile(command.generatePath);
+	const candidates = await generator.generate(baselineAgent);
+
+	if (candidates.length === 0) {
+		return { exitCode: 0, json: { ok: true, command: "evolve", mode: "generate", candidateCount: 0 }, human: "No candidates generated" };
+	}
+
+	const results: Awaited<ReturnType<BenchmarkEvolutionEngine["compare"]>>[] = [];
+	for (const candidate of candidates) {
+		const engine = new BenchmarkEvolutionEngine({
+			baseline: baselineAgent,
+			suite,
+			generator: { async generate() { return [candidate]; } },
+			createRunner: (agent) => createRunner(command, deps, baselineBundle.subagents, agent),
+		});
+		const comparison = await engine.compare(candidate);
+		results.push(comparison);
+		if (command.historyPath) {
+			const store = deps.createEvolutionHistoryStore?.(command.historyPath) ?? new JsonlEvolutionHistoryStore(command.historyPath);
+			await store.saveComparison(comparison, candidate);
+		}
+	}
+
+	return {
+		exitCode: results.some((r) => r.recommendation === "reject") ? 1 : 0,
+		json: { ok: true, command: "evolve", mode: "generate", candidateCount: candidates.length, results: results.map((r) => evolutionJson(r, verifyEvolutionComparison(r.baseline, r.candidate))) },
+		human: formatEvolutionGenerateHuman(results),
+	};
+}
+
+async function handleEvolveAuto(command: EvolveCommand, deps: CliDeps): Promise<CliResult> {
+	if (!command.baselineAgentPath || !command.suitePath || !command.generatePath || command.autoIterations === undefined) {
+		throw new Error("--baseline-agent, --suite, --generate, --auto are required");
+	}
+	const bundle = await loadAgentBundle(command.baselineAgentPath);
+	let baselineAgent = effectiveAgentForCommand(bundle.agent, command);
+	const suite = await loadBenchmarkSuiteFromFile(command.suitePath);
+	const iterationSummaries: string[] = [];
+
+	for (let iteration = 1; iteration <= command.autoIterations; iteration++) {
+		const generator = await loadDeterministicCandidateGeneratorFromFile(command.generatePath);
+		const candidates = await generator.generate(baselineAgent);
+		if (candidates.length === 0) {
+			iterationSummaries.push(`Iteration ${iteration}: no candidates generated, stopping`);
+			break;
+		}
+
+		const comparisons: { candidate: EvolutionCandidate; comparison: Awaited<ReturnType<BenchmarkEvolutionEngine["compare"]>> }[] = [];
+		for (const candidate of candidates) {
+			const engine = new BenchmarkEvolutionEngine({
+				baseline: baselineAgent,
+				suite,
+				generator: { async generate() { return [candidate]; } },
+				createRunner: (agent) => createRunner(command, deps, bundle.subagents, agent),
+			});
+			const comparison = await engine.compare(candidate);
+			comparisons.push({ candidate, comparison });
+			if (command.historyPath) {
+				const store = deps.createEvolutionHistoryStore?.(command.historyPath) ?? new JsonlEvolutionHistoryStore(command.historyPath);
+				await store.saveComparison(comparison, candidate);
+			}
+		}
+
+		comparisons.sort(compareEvolutionResults);
+		const best = comparisons[0];
+		if (!best) {
+			iterationSummaries.push(`Iteration ${iteration}: no candidates to compare, stopping`);
+			break;
+		}
+
+		const rec = best.comparison.recommendation;
+		iterationSummaries.push(`Iteration ${iteration}: best=${best.candidate.id} recommendation=${rec} deltaScore=${best.comparison.deltaScore} deltaPassRate=${formatPercent(best.comparison.deltaPassRate)}`);
+
+		if (rec === "reject") {
+			iterationSummaries.push(`Iteration ${iteration}: all candidates rejected, stopping`);
+			break;
+		}
+
+		baselineAgent = { ...best.candidate.agent };
+	}
+
+	return {
+		exitCode: 0,
+		json: { ok: true, command: "evolve", mode: "auto", iterations: iterationSummaries.length },
+		human: ["Auto-evolve completed", "", ...iterationSummaries].join("\n"),
+	};
+}
+
+function compareEvolutionResults(
+	a: { comparison: Awaited<ReturnType<BenchmarkEvolutionEngine["compare"]>> },
+	b: { comparison: Awaited<ReturnType<BenchmarkEvolutionEngine["compare"]>> },
+): number {
+	const rank = (rec: string) => rec === "accept" ? 0 : rec === "needs-review" ? 1 : 2;
+	const rankDiff = rank(a.comparison.recommendation) - rank(b.comparison.recommendation);
+	if (rankDiff !== 0) return rankDiff;
+	return (b.comparison.deltaScore ?? 0) - (a.comparison.deltaScore ?? 0);
 }
 
 export async function writeOptionalFiles(command: { outputPath?: string; tracePath?: string }, result: CliResult): Promise<void> {
@@ -772,6 +903,37 @@ function formatEvolutionHuman(comparison: Awaited<ReturnType<BenchmarkEvolutionE
 		`Improvements: ${comparison.improvements.length === 0 ? "none" : comparison.improvements.join(", ")}`,
 		`Regressions: ${comparison.regressions.length === 0 ? "none" : comparison.regressions.join(", ")}`,
 	].join("\n");
+}
+
+function formatEvolutionHistoryHuman(records: EvolutionHistoryRecord[]): string {
+	if (records.length === 0) return "No evolution history records found";
+	const rows = [["#", "TIMESTAMP", "BASELINE", "CANDIDATE", "RECOMMENDATION", "Δ SCORE", "Δ PASS RATE", "IMPROVEMENTS", "REGRESSIONS"],
+		...records.map((r, i) => [
+			String(i + 1),
+			new Date(r.timestamp).toISOString().slice(0, 19).replace("T", " "),
+			r.baselineAgent.id,
+			r.candidateAgent.id,
+			r.recommendation,
+			String(r.deltaScore ?? "-"),
+			formatPercent(r.deltaPassRate),
+			r.improvements.length === 0 ? "-" : r.improvements.join(", "),
+			r.regressions.length === 0 ? "-" : r.regressions.join(", "),
+		])];
+	return [`Evolution history (${records.length} records)`, "", formatTable(rows)].join("\n");
+}
+
+function formatEvolutionGenerateHuman(results: Awaited<ReturnType<BenchmarkEvolutionEngine["compare"]>>[]): string {
+	const rows = [["#", "CANDIDATE", "RECOMMENDATION", "Δ SCORE", "Δ PASS RATE", "IMPROVEMENTS", "REGRESSIONS"],
+		...results.map((r, i) => [
+			String(i + 1),
+			r.candidate.agent.id,
+			r.recommendation,
+			String(r.deltaScore ?? "-"),
+			formatPercent(r.deltaPassRate),
+			r.improvements.length === 0 ? "-" : r.improvements.join(", "),
+			r.regressions.length === 0 ? "-" : r.regressions.join(", "),
+		])];
+	return [`Generated ${results.length} candidate(s)`, "", formatTable(rows)].join("\n");
 }
 
 async function readJsonFile(filePath: string): Promise<unknown> {

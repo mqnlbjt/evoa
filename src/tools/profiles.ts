@@ -7,6 +7,7 @@ import { createMcpRuntimeBundle } from "../mcp/registry.js";
 import type { McpServersConfig } from "../mcp/types.js";
 import type { SandboxPolicy } from "./sandbox.js";
 import { createTuiAutomationToolBundle, type TuiAutomationToolOptions } from "./tui-automation.js";
+import { createGenerateTaskSuiteTool, type GenerateTaskSuiteOptions } from "./generate-task-suite.js";
 
 export type ToolProfile = "read-only" | "coding" | "benchmark-sandbox" | "dangerous";
 
@@ -14,6 +15,7 @@ export interface ToolProfileOptions extends ReadOnlyToolOptions, MutatingToolOpt
 	profile?: ToolProfile;
 	mcpServers?: McpServersConfig;
 	tuiAutomation?: Omit<TuiAutomationToolOptions, "workspaceRoot">;
+	generateTaskSuite?: GenerateTaskSuiteOptions;
 }
 
 export const toolProfiles: readonly ToolProfile[] = ["read-only", "coding", "benchmark-sandbox", "dangerous"];
@@ -40,6 +42,9 @@ export function createToolRegistryForProfile(options: ToolProfileOptions): ToolR
 		const bundle = createTuiAutomationToolBundle({ ...options.tuiAutomation, workspaceRoot: options.workspaceRoot });
 		for (const tool of bundle.tools) registry.register(tool);
 		registry.registerDisposable(bundle.close);
+	}
+	if (profile !== "read-only" && profile !== "coding" && options.generateTaskSuite) {
+		registry.register(createGenerateTaskSuiteTool(options.generateTaskSuite));
 	}
 	return registry;
 }

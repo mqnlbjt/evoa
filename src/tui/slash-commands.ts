@@ -1,5 +1,6 @@
 import { formatTable } from "../cli/format.js";
 import type { ChatServiceContext } from "../cli/chat-service.js";
+import type { EvolutionHistoryRecord } from "../evolution/history-store.js";
 import type { TuiState } from "./state.js";
 import type { TuiView } from "./types.js";
 
@@ -8,6 +9,7 @@ export interface SlashCommandContext {
 	chat: ChatServiceContext;
 	stop: () => void;
 	newSession?: () => Promise<string>;
+	loadEvolutionHistory?: (historyPath: string) => Promise<EvolutionHistoryRecord[]>;
 }
 
 export interface SlashCommandResult {
@@ -42,6 +44,8 @@ export async function handleSlashCommand(input: string, context: SlashCommandCon
 	if (name === "/memory") return message(memoryText(context));
 	if (name === "/trace") return message(traceText(context, args));
 	if (name === "/trace-page") return switchView(context, "trace");
+	if (name === "/evolve-history") return handleEvolveHistoryCommand(context, args);
+	if (name === "/evolve") return switchView(context, "evolve");
 	return message(`Unknown command: ${name}\nType /help for commands.`);
 }
 
@@ -68,7 +72,25 @@ function helpText(): string {
 		"/trace   Show recent trace events",
 		"/trace N Show recent N trace events (max 50)",
 		"/trace-page Show trace page",
+		"/evolve  Show evolution view",
+		"/evolve-history <path> Load evolution history from JSONL",
 	].join("\n");
+}
+
+async function handleEvolveHistoryCommand(context: SlashCommandContext, args: string[]): Promise<SlashCommandResult> {
+	const historyPath = args[0];
+	if (!historyPath) return message("Usage: /evolve-history <path>");
+	if (!context.loadEvolutionHistory) return message("Evolution history loading is not available");
+	try {
+		const records = await context.loadEvolutionHistory(historyPath);
+		context.state.setEvolutionHistory(records);
+		context.state.setView("evolve");
+		context.state.addSystemMessage(`Loaded ${records.length} evolution history record(s) from ${historyPath}`);
+		return { handled: true };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return { handled: true, message: `Failed to load evolution history: ${message}` };
+	}
 }
 
 function statusText(context: SlashCommandContext): string {

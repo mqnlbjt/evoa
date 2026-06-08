@@ -1,0 +1,84 @@
+{
+  "id": "coding-edit",
+  "name": "代码编辑与重构",
+  "description": "编辑和重构代码的场景，结合 artifact + command 评分",
+  "tasks": [
+    {
+      "id": "coding-edit-add-function",
+      "type": "coding",
+      "title": "添加新函数",
+      "prompt": "在 /workspace/math.ts 中添加一个 isPrime(n: number): boolean 函数，判断 n 是否为质数。要求正确处理 n <= 1 的边界情况。",
+      "fixtures": [
+        {
+          "path": "math.ts",
+          "content": "export function factorial(n: number): number {\n  if (n <= 1) return 1;\n  return n * factorial(n - 1);\n}\n\nexport function gcd(a: number, b: number): number {\n  while (b !== 0) {\n    const t = b;\n    b = a % b;\n    a = t;\n  }\n  return a;\n}\n"
+        }
+      ],
+      "scoring": {
+        "method": "custom",
+        "maxScore": 10,
+        "config": {
+          "subscores": [
+            { "method": "artifact", "weight": 2, "config": { "path": "math.ts", "contains": ["isPrime"] } },
+            { "method": "command", "weight": 2, "config": { "command": "grep -c 'isPrime' math.ts", "exitCode": 0, "stdoutContains": ["1"] } },
+            { "method": "rubric", "weight": 6, "config": { "criteria": [{ "description": "function isPrime", "required": true }, { "description": "n <= 1", "required": true }, { "description": "return false", "required": true }, { "description": "因数", "required": true }, { "description": "Math.sqrt", "weight": 1 }], "passThreshold": 0.6 } }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["math.ts"]
+    },
+    {
+      "id": "coding-edit-fix-style",
+      "type": "coding",
+      "title": "修复代码风格",
+      "prompt": "修复 /workspace/badcode.py 中的问题：\n1. 将混合引号统一为双引号\n2. 修复缩进不一致（统一为4空格）\n3. 删除所有行尾空白\n4. 将 camelCase 变量名改为 snake_case",
+      "fixtures": [
+        {
+          "path": "badcode.py",
+          "content": "def processData(inputFile, outputDir):     \n    print('Processing ' + inputFile)  \n  with open(inputFile, 'r') as f:\n    resultList = []    \n    for lineNumber, line in enumerate(f):  \n        if lineNumber == 0:    \n            continue\n      cleanedLine = line.strip()    \n        resultList.append(cleanedLine)\n    return resultList\n"
+        }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "def process_data", "weight": 3, "required": true },
+            { "description": "input_file", "weight": 2, "required": true },
+            { "description": "output_dir", "weight": 2, "required": true },
+            { "description": "result_list", "weight": 2, "required": true },
+            { "description": "line_number", "weight": 1 }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["badcode.py"]
+    },
+    {
+      "id": "coding-edit-extract-common",
+      "type": "coding",
+      "title": "提取公共逻辑",
+      "prompt": "重构 /workspace/user-service.ts，将 createUser 和 updateUser 中重复的 email 验证逻辑提取为一个独立的 validateEmail 函数。",
+      "fixtures": [
+        {
+          "path": "user-service.ts",
+          "content": "interface User {\n  id: string;\n  name: string;\n  email: string;\n}\n\nfunction createUser(name: string, email: string): User {\n  if (!email.includes('@')) throw new Error('Invalid email');\n  if (email.length < 5) throw new Error('Email too short');\n  if (name.length === 0) throw new Error('Name is required');\n  const id = Math.random().toString(36).substr(2, 9);\n  return { id, name, email };\n}\n\nfunction updateUser(id: string, name: string, email: string): User {\n  if (!email.includes('@')) throw new Error('Invalid email');\n  if (email.length < 5) throw new Error('Email too short');\n  if (name.length === 0) throw new Error('Name is required');\n  return { id, name, email };\n}\n\nexport { createUser, updateUser, type User };\n"
+        }
+      ],
+      "scoring": {
+        "method": "custom",
+        "maxScore": 10,
+        "config": {
+          "subscores": [
+            { "method": "artifact", "weight": 2, "config": { "path": "user-service.ts", "contains": ["validateEmail"] } },
+            { "method": "command", "weight": 2, "config": { "command": "grep -o \"includes('@')\" user-service.ts | wc -l", "exitCode": 0, "stdoutContains": ["1"] } },
+            { "method": "rubric", "weight": 6, "config": { "criteria": [{ "description": "validateEmail", "required": true }, { "description": "createUser", "required": true }, { "description": "updateUser", "required": true }, { "description": "不再重复", "weight": 1 }], "passThreshold": 0.6 } }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["user-service.ts"]
+    }
+  ]
+}

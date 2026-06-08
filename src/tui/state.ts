@@ -4,6 +4,7 @@ import type { TraceEvent } from "../runtime/events.js";
 import type { ToolCall, ToolResult } from "../tools/registry.js";
 import { TuiStatsAccumulator } from "./stats.js";
 import { renderToolCall, renderToolResultText } from "./tool-renderers.js";
+import type { EvolutionHistoryRecord } from "../evolution/history-store.js";
 import type { ChatLogEntry, ChatLogSeverity, ContextUsage, RunningToolEntry, TuiStateOptions, TuiStateSnapshot, TuiStatus, TuiView } from "./types.js";
 
 const DEFAULT_MAX_LOG_ENTRIES = 200;
@@ -30,6 +31,7 @@ export class TuiState {
 	private currentModel: string;
 	private currentProvider: string;
 	private contextUsage: ContextUsage | undefined;
+	private evolutionHistory: EvolutionHistoryRecord[] = [];
 
 	constructor(private options: TuiStateOptions) {
 		this.now = options.now ?? Date.now;
@@ -66,6 +68,7 @@ export class TuiState {
 			runningTools: Array.from(this.runningTools.values()),
 			trace: [...this.trace],
 			...(this.contextUsage ? { contextUsage: this.contextUsage } : {}),
+			evolutionHistory: [...this.evolutionHistory],
 		};
 	}
 
@@ -88,7 +91,8 @@ export class TuiState {
 		this.toolDurationMs = 0;
 		this.mcpDurationMs = 0;
 		this.skillDurationMs = 0;
-		this.contextUsage = undefined;
+			this.contextUsage = undefined;
+		this.evolutionHistory = [];
 	}
 
 	addUserMessage(text: string): void {
@@ -115,6 +119,14 @@ export class TuiState {
 
 	setView(view: TuiView): void {
 		this.activeView = view;
+	}
+
+	setEvolutionHistory(records: EvolutionHistoryRecord[]): void {
+		this.evolutionHistory = records;
+	}
+
+	getEvolutionHistory(): EvolutionHistoryRecord[] {
+		return this.evolutionHistory;
 	}
 
 	applyTraceEvent(event: TraceEvent): void {

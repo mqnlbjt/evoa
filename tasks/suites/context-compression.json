@@ -1,0 +1,114 @@
+{
+  "id": "context-compression",
+  "name": "上下文压缩",
+  "description": "15+ 噪音文件淹没关键信息，考验 compaction 后信息保留能力",
+  "tasks": [
+    {
+      "id": "compression-log-root-cause",
+      "type": "general",
+      "title": "海量日志中定位故障根因",
+      "prompt": "生产环境凌晨 3:15 发生了一次服务宕机。请检查 /workspace/logs/ 下的所有日志文件，找出宕机的根本原因。\n\n日志目录包含：\n- 应用日志：app-2024-06-15.log 至 app-2024-06-20.log（6 天滚动日志，每天约 200 行）\n- 系统日志：sys-2024-06-15.log 至 sys-2024-06-20.log（6 天）\n- Nginx 访问日志：access-2024-06-15.log 至 access-2024-06-19.log（5 天）\n\n找到根因后，将分析结果写入 /workspace/root-cause.md。",
+      "fixtures": [
+        { "path": "workspaces/compression-log-root-cause/logs/app-2024-06-15.log", "content": "2024-06-15 00:00:01 [INFO] Scheduler started\n2024-06-15 00:00:05 [INFO] Health check OK\n2024-06-15 00:01:10 [INFO] Request GET /api/users 200 45ms\n2024-06-15 00:02:22 [INFO] Request POST /api/orders 201 120ms\n2024-06-15 00:03:15 [DEBUG] Cache hit: user_session_abc123\n2024-06-15 00:04:08 [INFO] Request GET /api/products 200 30ms\n2024-06-15 00:05:44 [INFO] Request GET /api/users 200 42ms\n2024-06-15 00:06:12 [DEBUG] DB pool: 5 active, 15 idle\n2024-06-15 00:07:33 [INFO] Request PUT /api/users/42 200 88ms\n2024-06-15 00:08:19 [INFO] Scheduled task: cleanup_expired_sessions completed (removed 3)\n2024-06-15 00:09:01 [INFO] Request GET /api/orders 200 55ms\n2024-06-15 00:10:45 [INFO] Request POST /api/orders 201 134ms\n2024-06-15 00:11:22 [DEBUG] Cache miss: product_887\n2024-06-15 00:12:08 [INFO] Request GET /api/products 200 28ms\n2024-06-15 00:13:55 [INFO] Health check OK\n2024-06-15 00:14:30 [DEBUG] GC: freed 2048KB, heap 45MB\n2024-06-15 00:15:12 [INFO] Request DELETE /api/sessions/expired 200 15ms" },
+        { "path": "workspaces/compression-log-root-cause/logs/app-2024-06-16.log", "content": "2024-06-16 00:00:01 [INFO] Scheduler started\n...（中间省略 190 行正常请求日志）\n2024-06-16 23:58:44 [INFO] Request GET /api/health 200 2ms\n2024-06-16 23:59:12 [DEBUG] DB pool: 3 active, 17 idle\n2024-06-16 23:59:55 [INFO] Daily report generation completed" },
+        { "path": "workspaces/compression-log-root-cause/logs/app-2024-06-17.log", "content": "2024-06-17 00:00:01 [INFO] Scheduler started\n2024-06-17 00:05:33 [WARN] Slow query detected: SELECT * FROM orders WHERE created_at > '2024-01-01' (took 2300ms)\n2024-06-17 00:10:15 [INFO] Request GET /api/dashboard 200 340ms\n...（中间省略 185 行正常日志）\n2024-06-17 23:55:01 [INFO] Backup started\n2024-06-17 23:58:22 [INFO] Backup completed (1.2GB)" },
+        { "path": "workspaces/compression-log-root-cause/logs/app-2024-06-18.log", "content": "2024-06-18 00:00:01 [INFO] Scheduler started\n2024-06-18 02:15:33 [ERROR] Connection pool exhausted (20/20), retrying...\n2024-06-18 02:15:34 [WARN] Retry 1/3 failed: pool still full\n2024-06-18 02:15:35 [WARN] Retry 2/3 failed: pool still full\n2024-06-18 02:15:36 [ERROR] Retry 3/3 exhausted, dropping request\n...（省略中间日志）\n2024-06-18 03:15:00 [CRITICAL] OutOfMemoryError: Java heap space - GC overhead limit exceeded\n2024-06-18 03:15:01 [FATAL] Process terminated (exit code 137)\n2024-06-18 03:15:02 [INFO] Watchdog restarting process..." },
+        { "path": "workspaces/compression-log-root-cause/logs/app-2024-06-19.log", "content": "2024-06-19 00:00:01 [INFO] Scheduler started (recovered from crash)\n2024-06-19 00:05:00 [WARN] Memory usage: 78% (warning threshold: 75%)\n2024-06-19 00:30:00 [WARN] Memory usage: 82%\n2024-06-19 01:00:00 [WARN] Memory usage: 88%\n...（省略中间正常日志）\n2024-06-19 23:59:59 [INFO] Daily report skipped (low memory)" },
+        { "path": "workspaces/compression-log-root-cause/logs/app-2024-06-20.log", "content": "2024-06-20 00:00:01 [INFO] Scheduler started\n2024-06-20 00:15:00 [WARN] Memory usage: 91%\n2024-06-20 00:30:00 [CRITICAL] Memory usage: 97%, triggering emergency GC\n2024-06-20 00:30:05 [ERROR] Emergency GC failed: insufficient free memory\n2024-06-20 00:31:00 [CRITICAL] OutOfMemoryError: unable to create new native thread\n2024-06-20 00:31:01 [FATAL] Kernel OOM Killer invoked\n2024-06-20 00:31:02 [FATAL] Process killed by OOM (exit code 137)\n2024-06-20 00:31:03 [INFO] Watchdog: max restart attempts (5) exceeded, giving up" },
+        { "path": "workspaces/compression-log-root-cause/logs/sys-2024-06-18.log", "content": "Jun 18 02:15:30 server1 kernel: TCP: Possible SYN flooding on port 80\nJun 18 02:15:30 server1 kernel: net_ratelimit: 234 callbacks suppressed\nJun 18 03:14:58 server1 kernel: java invoked oom-killer: gfp_mask=0x201da, order=0\nJun 18 03:14:59 server1 kernel: Out of memory: Kill process 28145 (java) score 958\nJun 18 03:15:00 server1 kernel: Killed process 28145 (java) total-vm:4194304kB" },
+        { "path": "workspaces/compression-log-root-cause/logs/sys-2024-06-20.log", "content": "Jun 20 00:30:58 server1 kernel: java invoked oom-killer: gfp_mask=0x201da, order=0\nJun 20 00:30:59 server1 kernel: Out of memory: Kill process 39122 (java) score 972\nJun 20 00:31:00 server1 kernel: Killed process 39122 (java) total-vm:8388608kB\nJun 20 00:31:01 server1 kernel: Watchdog: process restart count exceeded limit" },
+        { "path": "workspaces/compression-log-root-cause/logs/access-2024-06-18.log", "content": "10.0.1.100 - - [18/Jun/2024:00:00:01] \"GET / HTTP/1.1\" 200 1024\n10.0.1.101 - - [18/Jun/2024:00:01:15] \"POST /api/upload HTTP/1.1\" 200 512\n...（省略约 300 行正常访问记录）\n10.0.2.50 - - [18/Jun/2024:02:15:30] \"GET /api/search?q=test HTTP/1.1\" 503 0\n10.0.2.51 - - [18/Jun/2024:02:15:31] \"POST /api/batch-import HTTP/1.1\" 503 0" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "OOM", "weight": 2 },
+            { "description": "root-cause.md", "weight": 1, "required": true },
+            { "description": "OutOfMemoryError", "weight": 3, "required": true },
+            { "description": "6月18日", "weight": 1 },
+            { "description": "内存泄漏", "weight": 2 },
+            { "description": "Connection pool", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["root-cause.md"]
+    },
+    {
+      "id": "compression-security-audit",
+      "type": "general",
+      "title": "大代码库安全漏洞审计",
+      "prompt": "安全团队要求审计 /workspace/src/ 下的所有 Python 文件，找出潜在的安全问题。\n\n仓库有 18 个 Python 文件，分布在 5 个子目录中。已知的问题是：\n- 某个文件使用了硬编码的 API 密钥\n- 某个文件有 SQL 注入风险\n- 某个文件使用了不安全的 pickle.load()\n\n请逐一检查所有文件，将发现的安全问题汇总写入 /workspace/security-audit.md。",
+      "fixtures": [
+        { "path": "workspaces/compression-security-audit/src/models/user.py", "content": "\"\"\"User model and authentication.\"\"\"\nimport hashlib\nimport os\n\ndef hash_password(password: str) -> str:\n    salt = os.urandom(16).hex()\n    return salt + \":\" + hashlib.sha256((salt + password).encode()).hexdigest()\n\ndef verify_password(password: str, hashed: str) -> bool:\n    salt, hash_val = hashed.split(\":\")\n    return hashlib.sha256((salt + password).encode()).hexdigest() == hash_val\n" },
+        { "path": "workspaces/compression-security-audit/src/utils/helpers.py", "content": "\"\"\"General utilities.\"\"\"\nimport json\nfrom datetime import datetime\n\ndef format_timestamp(ts: float) -> str:\n    return datetime.fromtimestamp(ts).isoformat()\n\ndef parse_json(data: str) -> dict:\n    return json.loads(data)\n" },
+        { "path": "workspaces/compression-security-audit/src/utils/__init__.py", "content": "" },
+        { "path": "workspaces/compression-security-audit/src/models/__init__.py", "content": "" },
+        { "path": "workspaces/compression-security-audit/src/api/endpoints.py", "content": "\"\"\"REST API endpoints.\"\"\"\nimport sqlite3\nfrom flask import request\n\ndef search_products():\n    keyword = request.args.get('q', '')\n    conn = sqlite3.connect('products.db')\n    query = f\"SELECT * FROM products WHERE name LIKE '%{keyword}%'\"\n    results = conn.execute(query).fetchall()\n    conn.close()\n    return {'results': [dict(r) for r in results]}\n" },
+        { "path": "workspaces/compression-security-audit/src/api/__init__.py", "content": "" },
+        { "path": "workspaces/compression-security-audit/src/api/auth.py", "content": "\"\"\"Authentication routes.\"\"\"\nfrom models.user import verify_password\n\ndef login(username: str, password: str):\n    # Simplified for example\n    pass\n" },
+        { "path": "workspaces/compression-security-audit/src/services/payment.py", "content": "\"\"\"Payment processing service.\"\"\"\nimport requests\n\nSTRIPE_API_KEY = \"sk_test_000000000000000000000000000\"\nSTRIPE_ENDPOINT = \"https://api.stripe.com/v1/charges\"\n\ndef charge_customer(amount: int, token: str):\n    headers = {\"Authorization\": f\"Bearer {STRIPE_API_KEY}\"}\n    return requests.post(STRIPE_ENDPOINT, headers=headers, data={\"amount\": amount, \"source\": token})\n" },
+        { "path": "workspaces/compression-security-audit/src/services/email.py", "content": "\"\"\"Email service.\"\"\"\nimport smtplib\nfrom email.mime.text import MIMEText\n\ndef send_email(to: str, subject: str, body: str):\n    msg = MIMEText(body)\n    msg['Subject'] = subject\n    msg['To'] = to\n    with smtplib.SMTP('localhost', 25) as server:\n        server.send_message(msg)\n" },
+        { "path": "workspaces/compression-security-audit/src/services/__init__.py", "content": "" },
+        { "path": "workspaces/compression-security-audit/src/services/exporter.py", "content": "\"\"\"Data export to various formats.\"\"\"\nimport pickle\nimport json\nimport csv\n\ndef export_pickle(data: object, filepath: str):\n    with open(filepath, 'wb') as f:\n        pickle.dump(data, f)\n\ndef import_pickle(filepath: str):\n    with open(filepath, 'rb') as f:\n        return pickle.load(f)  # Security risk: arbitrary code execution\n\ndef export_json(data: object, filepath: str):\n    with open(filepath, 'w') as f:\n        json.dump(data, f)\n" },
+        { "path": "workspaces/compression-security-audit/src/tasks/scheduler.py", "content": "\"\"\"Background task scheduler.\"\"\"\nimport time\nimport threading\n\ntasks = []\n\ndef schedule(interval: int, fn, *args):\n    def wrapper():\n        while True:\n            fn(*args)\n            time.sleep(interval)\n    t = threading.Thread(target=wrapper, daemon=True)\n    t.start()\n    tasks.append(t)\n    return t\n" },
+        { "path": "workspaces/compression-security-audit/src/tasks/cleanup.py", "content": "\"\"\"Cleanup tasks.\"\"\"\nimport os\n\ndef cleanup_temp_files(directory: str, max_age_hours: int = 24):\n    import time\n    now = time.time()\n    for f in os.listdir(directory):\n        path = os.path.join(directory, f)\n        if os.path.isfile(path):\n            age = now - os.path.getmtime(path)\n            if age > max_age_hours * 3600:\n                os.remove(path)\n" },
+        { "path": "workspaces/compression-security-audit/src/tasks/reports.py", "content": "\"\"\"Report generation.\"\"\"\nimport csv\nimport os\n\ndef generate_sales_report(output_path: str, data: list[dict]):\n    with open(output_path, 'w', newline='') as f:\n        writer = csv.DictWriter(f, fieldnames=['date', 'product', 'amount'])\n        writer.writeheader()\n        writer.writerows(data)\n" },
+        { "path": "workspaces/compression-security-audit/src/tasks/__init__.py", "content": "" },
+        { "path": "workspaces/compression-security-audit/src/config/settings.py", "content": "\"\"\"Application settings.\"\"\"\nimport os\n\nDEBUG = os.environ.get('DEBUG', 'false').lower() == 'true'\nDATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///app.db')\nREDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')\nSECRET_KEY = os.environ.get('SECRET_KEY', 'change-me-in-production')\n" },
+        { "path": "workspaces/compression-security-audit/src/config/__init__.py", "content": "" },
+        { "path": "workspaces/compression-security-audit/src/__init__.py", "content": "" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "SK_LIVE", "weight": 2, "required": true },
+            { "description": "security-audit.md", "weight": 1, "required": true },
+            { "description": "SQL", "weight": 2, "required": true },
+            { "description": "pickle", "weight": 2, "required": true },
+            { "description": "API", "weight": 1 },
+            { "description": "硬编码", "weight": 1 },
+            { "description": "注入", "weight": 1 }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["security-audit.md"]
+    },
+    {
+      "id": "compression-data-cleaning",
+      "type": "general",
+      "title": "脏数据清洗与特征提取",
+      "prompt": "数据团队从多个渠道收集了一份客户数据集，但数据质量很差。\n\n/workspace/dirty_data/ 下包含：\n- customers_raw.csv（主数据，500 行，但有很多重复、缺失和格式错误）\n- phonebook.csv（电话簿，格式不统一）\n- duplicates_log.txt（已知重复记录日志）\n- notes/ 目录下有 10 个乱码命名的文本文件，其中只有 2 个包含有用的数据补充说明\n\n请完成：\n1. 识别并清理主数据中的所有问题\n2. 整合所有来源中有效的客户联系方式\n3. 输出清洗后的数据集到 /workspace/customers_clean.csv\n4. 输出数据质量报告到 /workspace/data-quality-report.md",
+      "fixtures": [
+        { "path": "workspaces/compression-data-cleaning/dirty_data/customers_raw.csv", "content": "id,name,email,phone,city,signup_date\n1,张三,zhangsan@mail.com,13800138001,北京,2024-01-15\n2,张三,zhangsan@mail.com,13800138001,北京,2024-01-15\n3,李四,lisi@mail.com,13900139002,,2024-02-20\n4,王五,wangwu@,13700137003,上海,2024/03/10\n5,赵六,zhaoliu@mail.com,not-a-phone,广州,2024-04-05\n6,钱七,qianqi@mail.com,13600136004,深圳,2024-05-12\n7,,sunba@mail.com,13500135005,杭州,2024-06-01\n8,周九,zhoujiu@mail.com,,成都,2024-07-18\n9,吴十,wushi@mail.com,13400134006,重庆,2024-0815\n10,张三,zhangsan_new@mail.com,13800138001,北京,2024-09-01\n11,郑十一,zheng11@mail.com,13300133007,武汉,2024-10-22\n12,王五,wangwu@mail.com,13700137003,上海,2024-03-10\n13,冯十二,feng12@mail.com,13200132008,invalid_city,2024-11-07\n14,陈十三,chen13,13100131009,南京,2024-12-01\n15,褚十四,chu14@mail.com,13000130000,INVALID,2025-01-19" },
+        { "path": "workspaces/compression-data-cleaning/dirty_data/phonebook.csv", "content": "name,contact_number,notes\n张三,Mobile:13800138001,primary\n李四,139-0013-9002,verified\n王五,(137)00137003,old record\n刘八,13700137004,external\n孙九,13500135005,internal" },
+        { "path": "workspaces/compression-data-cleaning/dirty_data/duplicates_log.txt", "content": "DUPLICATE CHECK LOG - 2024-12-15\n==================================\n[WARN] Row 2: duplicate of Row 1 (same name+email+phone)\n[WARN] Row 12: duplicate of Row 4 (same name+phone, different date)\n[INFO] Row 10: possible duplicate of Row 1 (name+phone match, email changed)\n[INFO] Total duplicates found: 3" },
+        { "path": "workspaces/compression-data-cleaning/dirty_data/notes/x1a9f3_notes.txt", "content": "NOTE: Marketing campaign Q3\nCampaign ID: MKT-2024-Q3\nBudget: ¥50,000\nTarget cities: Beijing, Shanghai, Guangzhou, Shenzhen\nStatus: Completed" },
+        { "path": "workspaces/compression-data-cleaning/dirty_data/notes/update_0920.txt", "content": "DATA UPDATE 2024-09-20\n- 吴十 phone changed from 13400134005 to 13400134006 (confirmed by customer)\n- 王五 email confirmed: wangwu@mail.com\n- New merge policy: match on (name + phone) OR (email) as identity keys" }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 12,
+        "config": {
+          "criteria": [
+            { "description": "customers_clean.csv", "weight": 2, "required": true },
+            { "description": "data-quality-report.md", "weight": 2, "required": true },
+            { "description": "重复", "weight": 1 },
+            { "description": "缺失", "weight": 1 },
+            { "description": "not-a-phone", "weight": 2 },
+            { "description": "wangwu@", "weight": 2 },
+            { "description": "INVALID", "weight": 1 },
+            { "description": "刘八", "weight": 1 }
+          ],
+          "passThreshold": 0.5
+        }
+      },
+      "expectedArtifacts": ["customers_clean.csv", "data-quality-report.md"]
+    }
+  ]
+}

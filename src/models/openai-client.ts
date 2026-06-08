@@ -1,7 +1,19 @@
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses.js";
 import { openAIPromptCacheParams, resolveCacheRetention } from "./cache.js";
-import { resolveReasoningPolicy, shouldReturnReasoning, shouldSendReasoningHistory } from "./reasoning.js";
-import type { ModelClient, ModelContentBlock, ModelRequest, ModelResponse, ModelToolCall, ModelToolDefinition, ModelUsage } from "./types.js";
+import {
+	resolveReasoningPolicy,
+	shouldReturnReasoning,
+	shouldSendReasoningHistory,
+} from "./reasoning.js";
+import type {
+	ModelClient,
+	ModelContentBlock,
+	ModelRequest,
+	ModelResponse,
+	ModelToolCall,
+	ModelToolDefinition,
+	ModelUsage,
+} from "./types.js";
 
 export interface OpenAIModelClientOptions {
 	apiKey?: string;
@@ -53,8 +65,13 @@ interface OpenAIChatChoiceLike {
 interface OpenAIChatStreamChoiceLike {
 	delta?: {
 		content?: string | null;
+		reasoning?: string | null;
 		reasoning_content?: string | null;
-		tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> | null;
+		tool_calls?: Array<{
+			index?: number;
+			id?: string;
+			function?: { name?: string; arguments?: string };
+		}> | null;
 	};
 }
 
@@ -90,7 +107,10 @@ export interface OpenAIResponseLike {
 	_request_id?: string | null | undefined;
 }
 
-type ResponseCreateParamsWithPromptCache = Omit<ResponseCreateParamsNonStreaming, "reasoning"> & {
+type ResponseCreateParamsWithPromptCache = Omit<
+	ResponseCreateParamsNonStreaming,
+	"reasoning"
+> & {
 	prompt_cache_key?: string;
 	prompt_cache_retention?: "24h";
 	reasoning?: { effort: string };
@@ -109,24 +129,50 @@ export interface OpenAIResponsesClient {
 
 export class OpenAIModelClient implements ModelClient {
 	private readonly fetchFn: typeof fetch;
+	private readonly useChatCompletions: boolean;
 
 	constructor(private readonly options: OpenAIModelClientOptions = {}) {
 		this.fetchFn = options.fetchFn ?? fetch;
+		// OpenAIModelClient always uses the Responses API.
+		// Use OpenAIChatModelClient (format "openai-chat") for Chat Completions format.
+		this.useChatCompletions = false;
 	}
 
-	async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+	private get endpoint(): string {
+		return this.useChatCompletions ? "/chat/completions" : "/responses";
+	}
+
+	async complete(
+		request: ModelRequest,
+		signal?: AbortSignal,
+	): Promise<ModelResponse> {
 		if (request.stream) return this.streamComplete(request, signal);
+		if (this.useChatCompletions) return this.completeChat(request, signal);
 
 		const params = this.buildParams(request);
-		const response = this.options.client ? await this.options.client.responses.create(params, signal ? { signal } : undefined) : await this.createResponse(params, signal);
+		const response = this.options.client
+			? await this.options.client.responses.create(
+					params,
+					signal ? { signal } : undefined,
+				)
+			: await this.createResponse(params, signal);
 		const toolCalls = parseToolCalls(response);
-		const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
-		const reasoning = shouldReturnReasoning(policy, toolCalls) ? parseReasoning(response) : undefined;
+		const policy = resolveReasoningPolicy(
+			request.agent.model,
+			"openai-responses",
+		);
+		const reasoning = shouldReturnReasoning(policy, toolCalls)
+			? parseReasoning(response)
+			: undefined;
 		const usage = normalizeUsage(response.usage);
-		const finishReason = response.choices?.[0]?.message ? (response.choices[0] as Record<string, unknown>).finish_reason as string | undefined : undefined;
+		const finishReason = response.choices?.[0]?.message
+			? ((response.choices[0] as Record<string, unknown>).finish_reason as
+					| string
+					| undefined)
+			: undefined;
 		return {
 			text: parseResponseText(response),
-			...(reasoning ? { reasoning } : {}),
+			...(reasoning !== undefined ? { reasoning } : {}),
 			...(toolCalls.length > 0 ? { toolCalls } : {}),
 			...(response._request_id ? { requestId: response._request_id } : {}),
 			...(usage ? { usage } : {}),
@@ -138,23 +184,87 @@ export class OpenAIModelClient implements ModelClient {
 		};
 	}
 
-	private async streamComplete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
-		if (this.options.client) return this.streamCompleteSDK(request, signal);
+	private async completeChat(
+		request: ModelRequest,
+		signal?: AbortSignal,
+	): Promise<ModelResponse> {
+		const apiKey = this.options.apiKey ?? process.env.OPENAI_API_KEY;
+		if (!apiKey)
+			throw new Error(
+				"OpenAI API key is required. Set OPENAI_API_KEY or pass apiKey.",
+			);
+		const body = buildChatCompletionsBody(request, this.options);
+		const response = await this.fetchFn(
+			`${normalizeBaseURL(this.options.baseURL)}/chat/completions`,
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${apiKey}`,
+					...this.options.defaultHeaders,
+				},
+				body: JSON.stringify(body),
+				...(signal ? { signal } : {}),
+			},
+		);
+		const json = (await response.json()) as
+			| Record<string, unknown>
+			| OpenAIErrorResponseLike;
+		if (!response.ok) {
+			const err =
+				"error" in json
+					? (json as OpenAIErrorResponseLike).error?.message
+					: undefined;
+			throw new Error(
+				err ?? `Chat Completions request failed with status ${response.status}`,
+			);
+		}
+		return parseChatCompletionsResponse(
+			json as Record<string, unknown>,
+			request,
+		);
+	}
+
+	private async streamComplete(
+		request: ModelRequest,
+		signal?: AbortSignal,
+	): Promise<ModelResponse> {
+		if (this.options.client && !this.useChatCompletions)
+			return this.streamCompleteSDK(request, signal);
 		return this.streamCompleteFetch(request, signal);
 	}
 
-	private async streamCompleteSDK(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+	private async streamCompleteSDK(
+		request: ModelRequest,
+		signal?: AbortSignal,
+	): Promise<ModelResponse> {
 		const params = { ...this.buildParams(request), stream: true as const };
-		const result = await (this.options.client!.responses.create as unknown as (p: Record<string, unknown>, o?: { signal?: AbortSignal }) => Promise<Record<string, unknown> | AsyncIterable<Record<string, unknown>>>)(params, signal ? { signal } : undefined);
+		const result = await (
+			this.options.client!.responses.create as unknown as (
+				p: Record<string, unknown>,
+				o?: { signal?: AbortSignal },
+			) => Promise<
+				Record<string, unknown> | AsyncIterable<Record<string, unknown>>
+			>
+		)(params, signal ? { signal } : undefined);
 
-		if (typeof result !== "object" || result === null || !(Symbol.asyncIterator in result)) {
+		if (
+			typeof result !== "object" ||
+			result === null ||
+			!(Symbol.asyncIterator in result)
+		) {
 			const response = result as OpenAIResponseLike;
 			const toolCalls = parseToolCalls(response);
-			const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
-			const reasoning = shouldReturnReasoning(policy, toolCalls) ? parseReasoning(response) : undefined;
+			const policy = resolveReasoningPolicy(
+				request.agent.model,
+				"openai-responses",
+			);
+			const reasoning = shouldReturnReasoning(policy, toolCalls)
+				? parseReasoning(response)
+				: undefined;
 			return {
 				text: parseResponseText(response),
-				...(reasoning ? { reasoning } : {}),
+				...(reasoning !== undefined ? { reasoning } : {}),
 				...(toolCalls.length > 0 ? { toolCalls } : {}),
 				...(response._request_id ? { requestId: response._request_id } : {}),
 			};
@@ -168,21 +278,32 @@ export class OpenAIModelClient implements ModelClient {
 		return streamResponseFromState(state, request);
 	}
 
-	private async streamCompleteFetch(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
+	private async streamCompleteFetch(
+		request: ModelRequest,
+		signal?: AbortSignal,
+	): Promise<ModelResponse> {
 		const apiKey = this.options.apiKey ?? process.env.OPENAI_API_KEY;
-		if (!apiKey) throw new Error("OpenAI API key is required. Set OPENAI_API_KEY or pass apiKey.");
+		if (!apiKey)
+			throw new Error(
+				"OpenAI API key is required. Set OPENAI_API_KEY or pass apiKey.",
+			);
 
-		const params = { ...this.buildParams(request), stream: true };
-		const response = await this.fetchFn(`${normalizeBaseURL(this.options.baseURL)}/responses`, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				authorization: `Bearer ${apiKey}`,
-				...this.options.defaultHeaders,
+		const params = this.useChatCompletions
+			? { ...buildChatCompletionsBody(request, this.options), stream: true }
+			: { ...this.buildParams(request), stream: true };
+		const response = await this.fetchFn(
+			`${normalizeBaseURL(this.options.baseURL)}${this.endpoint}`,
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${apiKey}`,
+					...this.options.defaultHeaders,
+				},
+				body: JSON.stringify(params),
+				...(signal ? { signal } : {}),
 			},
-			body: JSON.stringify(params),
-			...(signal ? { signal } : {}),
-		});
+		);
 
 		if (!response.ok) {
 			const errorBody = await response.text();
@@ -190,10 +311,13 @@ export class OpenAIModelClient implements ModelClient {
 			try {
 				const parsed = JSON.parse(errorBody);
 				if (parsed.error?.message) message = parsed.error.message;
-			} catch { /* use default message */ }
+			} catch {
+				/* use default message */
+			}
 			throw new Error(message);
 		}
-		if (!response.body) throw new Error("OpenAI streaming response has no body");
+		if (!response.body)
+			throw new Error("OpenAI streaming response has no body");
 
 		const reader = response.body.getReader();
 		const decoder = new TextDecoder();
@@ -214,7 +338,11 @@ export class OpenAIModelClient implements ModelClient {
 					const data = trimmed.slice(6);
 					if (data === "[DONE]") continue;
 					let event: OpenAIStreamEventLike;
-					try { event = JSON.parse(data) as OpenAIStreamEventLike; } catch { continue; }
+					try {
+						event = JSON.parse(data) as OpenAIStreamEventLike;
+					} catch {
+						continue;
+					}
 					processOpenAIStreamEvent(state, event, request);
 				}
 			}
@@ -225,31 +353,56 @@ export class OpenAIModelClient implements ModelClient {
 		return streamResponseFromState(state, request);
 	}
 
-	private async createResponse(params: ResponseCreateParamsWithPromptCache, signal?: AbortSignal): Promise<OpenAIResponseLike> {
+	private async createResponse(
+		params: ResponseCreateParamsWithPromptCache,
+		signal?: AbortSignal,
+	): Promise<OpenAIResponseLike> {
 		const apiKey = this.options.apiKey ?? process.env.OPENAI_API_KEY;
-		if (!apiKey) throw new Error("OpenAI API key is required. Set OPENAI_API_KEY or pass apiKey.");
-		const response = await this.fetchFn(`${normalizeBaseURL(this.options.baseURL)}/responses`, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				authorization: `Bearer ${apiKey}`,
-				...this.options.defaultHeaders,
+		if (!apiKey)
+			throw new Error(
+				"OpenAI API key is required. Set OPENAI_API_KEY or pass apiKey.",
+			);
+		const response = await this.fetchFn(
+			`${normalizeBaseURL(this.options.baseURL)}${this.endpoint}`,
+			{
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${apiKey}`,
+					...this.options.defaultHeaders,
+				},
+				body: JSON.stringify(params),
+				...(signal ? { signal } : {}),
 			},
-			body: JSON.stringify(params),
-			...(signal ? { signal } : {}),
-		});
-		const body = (await response.json()) as OpenAIResponseLike | OpenAIErrorResponseLike;
-		if (!response.ok) throw new Error("error" in body ? body.error?.message ?? `OpenAI responses request failed with status ${response.status}` : `OpenAI responses request failed with status ${response.status}`);
+		);
+		const body = (await response.json()) as
+			| OpenAIResponseLike
+			| OpenAIErrorResponseLike;
+		if (!response.ok)
+			throw new Error(
+				"error" in body
+					? (body.error?.message ??
+							`OpenAI responses request failed with status ${response.status}`)
+					: `OpenAI responses request failed with status ${response.status}`,
+			);
 		return body as OpenAIResponseLike;
 	}
 
-	private buildParams(request: ModelRequest): ResponseCreateParamsWithPromptCache {
+	private buildParams(
+		request: ModelRequest,
+	): ResponseCreateParamsWithPromptCache {
 		const params: ResponseCreateParamsWithPromptCache = {
 			model: request.agent.model.model,
 			instructions: request.agent.prompts.system,
-			input: buildInput(request),
+			input: buildInput(request, false) as NonNullable<
+				ResponseCreateParamsNonStreaming["input"]
+			>,
 			store: this.options.store ?? false,
-			...openAIPromptCacheParams(request.sessionId, resolveCacheRetention(request), this.options.baseURL),
+			...openAIPromptCacheParams(
+				request.sessionId,
+				resolveCacheRetention(request),
+				this.options.baseURL,
+			),
 		};
 
 		if (this.options.temperature !== undefined) {
@@ -260,60 +413,278 @@ export class OpenAIModelClient implements ModelClient {
 		}
 		applyOpenAIReasoningParams(params, request);
 		if (request.tools?.length) {
-			params.tools = request.tools.map(toOpenAITool) as NonNullable<ResponseCreateParamsNonStreaming["tools"]>;
+			params.tools = request.tools.map(toOpenAITool) as NonNullable<
+				ResponseCreateParamsNonStreaming["tools"]
+			>;
 		}
 
 		return params;
 	}
 }
 
-function buildInput(request: ModelRequest): NonNullable<ResponseCreateParamsNonStreaming["input"]> {
+function buildInput(
+	request: ModelRequest,
+	useChatCompletions = false,
+): NonNullable<ResponseCreateParamsNonStreaming["input"]> | unknown[] {
 	const input: unknown[] = [];
-	const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
-	for (const message of request.messages.filter((message) => message.role !== "system")) {
+	const policy = resolveReasoningPolicy(
+		request.agent.model,
+		useChatCompletions ? "chat-compatible" : "openai-responses",
+	);
+	for (const message of request.messages.filter(
+		(message) => message.role !== "system",
+	)) {
 		if (message.role === "tool") {
-			const result = message.contentBlocks?.find((block): block is Extract<ModelContentBlock, { type: "tool_result" }> => block.type === "tool_result");
+			if (useChatCompletions) {
+				const result = message.contentBlocks?.find(
+					(
+						block,
+					): block is Extract<ModelContentBlock, { type: "tool_result" }> =>
+						block.type === "tool_result",
+				);
+				input.push({
+					role: "tool",
+					tool_call_id: result?.toolCallId ?? message.toolCallId ?? "",
+					content: result?.content ?? message.content,
+				});
+				continue;
+			}
+			const result = message.contentBlocks?.find(
+				(block): block is Extract<ModelContentBlock, { type: "tool_result" }> =>
+					block.type === "tool_result",
+			);
 			input.push({
 				type: "function_call_output",
 				call_id: result?.toolCallId ?? message.toolCallId ?? "",
 				output: result?.content ?? message.content,
-				...(result?.toolName ?? message.toolName ? { name: result?.toolName ?? message.toolName } : {}),
+				...((result?.toolName ?? message.toolName)
+					? { name: result?.toolName ?? message.toolName }
+					: {}),
 			});
 			continue;
 		}
-		const toolCalls = message.contentBlocks?.filter((block): block is Extract<ModelContentBlock, { type: "tool_call" }> => block.type === "tool_call") ?? [];
-		const reasoning = message.contentBlocks?.find((block): block is Extract<ModelContentBlock, { type: "reasoning" }> => block.type === "reasoning");
-		if (message.role === "assistant" && (toolCalls.length > 0 || reasoning)) {
-			input.push(...assistantHistoryItem(message, reasoning, toolCalls, shouldSendReasoningHistory(policy, toolCalls)));
+		const toolCalls =
+			message.contentBlocks?.filter(
+				(block): block is Extract<ModelContentBlock, { type: "tool_call" }> =>
+					block.type === "tool_call",
+			) ?? [];
+		const reasoning = message.contentBlocks?.find(
+			(block): block is Extract<ModelContentBlock, { type: "reasoning" }> =>
+				block.type === "reasoning",
+		);
+		const alwaysIncludeReasoning =
+			policy.providerStyle === "deepseek" ||
+			policy.providerStyle === "chat-compatible";
+		if (
+			message.role === "assistant" &&
+			(toolCalls.length > 0 || reasoning || alwaysIncludeReasoning)
+		) {
+			if (useChatCompletions) {
+				input.push(chatAssistantMessage(message, reasoning, toolCalls));
+			} else {
+				input.push(
+					...assistantHistoryItem(
+						message,
+						reasoning,
+						toolCalls,
+						alwaysIncludeReasoning,
+					),
+				);
+			}
 			continue;
 		}
 		input.push({ role: message.role, content: message.content });
 	}
-	return input as NonNullable<ResponseCreateParamsNonStreaming["input"]>;
+	return input;
 }
 
-function assistantHistoryItem(message: { content: string }, reasoning: Extract<ModelContentBlock, { type: "reasoning" }> | undefined, toolCalls: Array<Extract<ModelContentBlock, { type: "tool_call" }>>, includeReasoning: boolean): unknown[] {
+function assistantHistoryItem(
+	message: { content: string },
+	reasoning: Extract<ModelContentBlock, { type: "reasoning" }> | undefined,
+	toolCalls: Array<Extract<ModelContentBlock, { type: "tool_call" }>>,
+	alwaysIncludeReasoning?: boolean,
+): unknown[] {
 	const items: unknown[] = [];
-	if (message.content || (reasoning && includeReasoning)) {
-		items.push({ role: "assistant", content: message.content, ...(reasoning && includeReasoning ? { reasoning_content: reasoning.text } : {}) });
+	if (
+		message.content ||
+		reasoning ||
+		toolCalls.length > 0 ||
+		alwaysIncludeReasoning
+	) {
+		items.push({
+			role: "assistant",
+			content: message.content,
+			reasoning_content: reasoning?.text ?? "",
+		});
 	}
-	items.push(...toolCalls.map((call) => ({ type: "function_call", call_id: call.id, name: call.name, arguments: JSON.stringify(call.input ?? {}) })));
+	items.push(
+		...toolCalls.map((call) => ({
+			type: "function_call",
+			call_id: call.id,
+			name: call.name,
+			arguments: JSON.stringify(call.input ?? {}),
+		})),
+	);
 	return items;
 }
 
-function applyOpenAIReasoningParams(params: ResponseCreateParamsWithPromptCache, request: ModelRequest): void {
-	const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
+function chatAssistantMessage(
+	message: { content: string },
+	reasoning: Extract<ModelContentBlock, { type: "reasoning" }> | undefined,
+	toolCalls: Array<Extract<ModelContentBlock, { type: "tool_call" }>>,
+): unknown {
+	return {
+		role: "assistant",
+		content: message.content || null,
+		reasoning_content: reasoning?.text ?? "",
+		...(toolCalls.length > 0
+			? {
+					tool_calls: toolCalls.map((call) => ({
+						id: call.id,
+						type: "function",
+						function: {
+							name: call.name,
+							arguments: JSON.stringify(call.input ?? {}),
+						},
+					})),
+				}
+			: {}),
+	};
+}
+
+function buildChatCompletionsBody(
+	request: ModelRequest,
+	options: OpenAIModelClientOptions,
+): Record<string, unknown> {
+	const policy = resolveReasoningPolicy(request.agent.model, "chat-compatible");
+	const body: Record<string, unknown> = {
+		model: request.agent.model.model,
+		messages: [
+			...(request.messages.find((m) => m.role === "system")
+				? [
+						{
+							role: "system",
+							content: request.messages.find((m) => m.role === "system")!
+								.content,
+						},
+					]
+				: []),
+			...(buildInput(request, true) as unknown[]),
+		],
+		stream: false,
+	};
+	if (options.temperature !== undefined) body.temperature = options.temperature;
+	if (options.maxOutputTokens !== undefined)
+		body.max_tokens = options.maxOutputTokens;
+	applyChatCompletionsReasoningParams(body, policy);
+	if (request.tools?.length) body.tools = request.tools.map(toOpenAITool);
+	return body;
+}
+
+function applyChatCompletionsReasoningParams(
+	body: Record<string, unknown>,
+	policy: ReturnType<typeof resolveReasoningPolicy>,
+): void {
+	if (!policy.enabled) return;
+	if (policy.requestField === "extra_body.thinking") {
+		body.extra_body = {
+			...((body.extra_body as Record<string, unknown>) ?? {}),
+			thinking: { type: policy.thinkingType },
+			reasoning_effort: policy.effort,
+		};
+		return;
+	}
+	body.reasoning_effort = policy.effort;
+}
+
+function parseChatCompletionsResponse(
+	json: Record<string, unknown>,
+	request: ModelRequest,
+): ModelResponse {
+	const choice = asRecord(toArray(json.choices)[0]);
+	const message = asRecord(choice.message);
+	const content = typeof message.content === "string" ? message.content : "";
+	const toolCalls = parseToolCalls(json as OpenAIResponseLike);
+	const policy = resolveReasoningPolicy(request.agent.model, "chat-compatible");
+	const rawReasoning = message.reasoning ?? message.reasoning_content;
+	const reasoningContent =
+		typeof rawReasoning === "string" && rawReasoning.length > 0
+			? rawReasoning
+			: undefined;
+	const reasoning =
+		reasoningContent !== undefined && shouldReturnReasoning(policy, toolCalls)
+			? reasoningContent
+			: undefined;
+	const usage = normalizeUsage(json.usage);
+	const requestId = typeof json.id === "string" ? json.id : undefined;
+	const finishReason =
+		typeof choice.finish_reason === "string" ? choice.finish_reason : undefined;
+	return {
+		text: content,
+		...(reasoning !== undefined ? { reasoning } : {}),
+		...(toolCalls.length > 0 ? { toolCalls } : {}),
+		...(requestId ? { requestId } : {}),
+		...(usage ? { usage } : {}),
+		metadata: {
+			...(requestId ? { requestId } : {}),
+			...(usage
+				? {
+						usage: {
+							input_tokens: usage.inputTokens,
+							output_tokens: usage.outputTokens,
+						},
+					}
+				: {}),
+			...(finishReason ? { finishReason } : {}),
+		},
+	};
+}
+
+function isChatCompletionsBaseURL(baseURL: string | undefined): boolean {
+	if (!baseURL) return false;
+	const normalized = baseURL.replace(/\/+$/, "").toLowerCase();
+	return (
+		!normalized.endsWith("api.openai.com/v1") &&
+		!normalized.endsWith("api.openai.com")
+	);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+function toArray(value: unknown): unknown[] {
+	return Array.isArray(value) ? value : [];
+}
+
+function applyOpenAIReasoningParams(
+	params: ResponseCreateParamsWithPromptCache,
+	request: ModelRequest,
+): void {
+	const policy = resolveReasoningPolicy(
+		request.agent.model,
+		"openai-responses",
+	);
 	if (!policy.enabled) return;
 	if (policy.requestField === "reasoning_effort") {
 		params.reasoning_effort = policy.effort;
 		return;
 	}
 	if (policy.requestField === "extra_body.reasoning_effort") {
-		params.extra_body = { ...params.extra_body, reasoning_effort: policy.effort };
+		params.extra_body = {
+			...params.extra_body,
+			reasoning_effort: policy.effort,
+		};
 		return;
 	}
 	if (policy.requestField === "extra_body.thinking") {
-		params.extra_body = { ...params.extra_body, thinking: { type: policy.thinkingType }, reasoning_effort: policy.effort };
+		params.extra_body = {
+			...params.extra_body,
+			thinking: { type: policy.thinkingType },
+			reasoning_effort: policy.effort,
+		};
 		return;
 	}
 	params.reasoning = { effort: policy.effort };
@@ -342,7 +713,9 @@ function parseToolCalls(response: OpenAIResponseLike): ModelToolCall[] {
 		calls.push({
 			id,
 			name: item.name,
-			...(item.arguments === undefined ? {} : { input: parseArguments(item.arguments) }),
+			...(item.arguments === undefined
+				? {}
+				: { input: parseArguments(item.arguments) }),
 		});
 	}
 	for (const call of response.choices?.[0]?.message?.tool_calls ?? []) {
@@ -350,7 +723,9 @@ function parseToolCalls(response: OpenAIResponseLike): ModelToolCall[] {
 		calls.push({
 			id: call.id,
 			name: call.function.name,
-			...(call.function.arguments === undefined ? {} : { input: parseArguments(call.function.arguments) }),
+			...(call.function.arguments === undefined
+				? {}
+				: { input: parseArguments(call.function.arguments) }),
 		});
 	}
 	return calls;
@@ -362,9 +737,15 @@ function parseReasoning(response: OpenAIResponseLike): string | undefined {
 		if (item.type === "reasoning") {
 			if (item.reasoning_content) parts.push(item.reasoning_content);
 			else if (typeof item.content === "string") parts.push(item.content);
-			else if (item.summary?.length) parts.push(...item.summary.map((entry) => entry.text ?? "").filter((text) => text.length > 0));
+			else if (item.summary?.length)
+				parts.push(
+					...item.summary
+						.map((entry) => entry.text ?? "")
+						.filter((text) => text.length > 0),
+				);
 		} else if (item.reasoning_content) parts.push(item.reasoning_content);
-		if (Array.isArray(item.content)) parts.push(...reasoningContentParts(item.content));
+		if (Array.isArray(item.content))
+			parts.push(...reasoningContentParts(item.content));
 	}
 	const choiceReasoning = response.choices?.[0]?.message?.reasoning_content;
 	if (choiceReasoning) parts.push(choiceReasoning);
@@ -372,21 +753,40 @@ function parseReasoning(response: OpenAIResponseLike): string | undefined {
 }
 
 function parseResponseText(response: OpenAIResponseLike): string {
-	return nonEmptyString(response.output_text) ?? parseChoiceText(response.choices?.[0]?.message?.content) ?? parseOutputText(response);
+	return (
+		nonEmptyString(response.output_text) ??
+		parseChoiceText(response.choices?.[0]?.message?.content) ??
+		parseOutputText(response)
+	);
 }
 
 function createOpenAIStreamState(): OpenAIStreamState {
-	return { fullText: "", reasoningParts: [], toolCalls: [], chatToolCalls: new Map(), requestId: "" };
+	return {
+		fullText: "",
+		reasoningParts: [],
+		toolCalls: [],
+		chatToolCalls: new Map(),
+		requestId: "",
+	};
 }
 
-function processOpenAIStreamEvent(state: OpenAIStreamState, event: OpenAIStreamEventLike, request: ModelRequest): void {
+function processOpenAIStreamEvent(
+	state: OpenAIStreamState,
+	event: OpenAIStreamEventLike,
+	request: ModelRequest,
+): void {
 	processChatCompatibleStreamEvent(state, event, request);
 	const eventType = typeof event.type === "string" ? event.type : "";
-	if (eventType === "response.output_text.delta") appendTextDelta(state, event.delta, request);
-	else if (eventType === "response.reasoning_text.delta") appendReasoningDelta(state, event.delta, request);
-	else if (eventType === "response.output_item.added") startOutputItem(state, event.item);
-	else if (eventType === "response.function_call_arguments.delta") appendPendingCallDelta(state, event.delta);
-	else if (eventType === "response.output_item.done") finishOutputItem(state, event.item);
+	if (eventType === "response.output_text.delta")
+		appendTextDelta(state, event.delta, request);
+	else if (eventType === "response.reasoning_text.delta")
+		appendReasoningDelta(state, event.delta, request);
+	else if (eventType === "response.output_item.added")
+		startOutputItem(state, event.item);
+	else if (eventType === "response.function_call_arguments.delta")
+		appendPendingCallDelta(state, event.delta);
+	else if (eventType === "response.output_item.done")
+		finishOutputItem(state, event.item);
 	else if (eventType === "response.completed" && event.response) {
 		state.requestId = event.response._request_id ?? "";
 		const usage = normalizeUsage(event.response.usage);
@@ -396,13 +796,25 @@ function processOpenAIStreamEvent(state: OpenAIStreamState, event: OpenAIStreamE
 	}
 }
 
-function processChatCompatibleStreamEvent(state: OpenAIStreamState, event: OpenAIStreamEventLike, request: ModelRequest): void {
+function processChatCompatibleStreamEvent(
+	state: OpenAIStreamState,
+	event: OpenAIStreamEventLike,
+	request: ModelRequest,
+): void {
 	for (const choice of event.choices ?? []) {
 		appendTextDelta(state, choice.delta?.content ?? undefined, request);
-		appendReasoningDelta(state, choice.delta?.reasoning_content ?? undefined, request);
+		appendReasoningDelta(
+			state,
+			choice.delta?.reasoning ?? choice.delta?.reasoning_content ?? undefined,
+			request,
+		);
 		for (const call of choice.delta?.tool_calls ?? []) {
 			const index = call.index ?? 0;
-			const current = state.chatToolCalls.get(index) ?? { id: "", name: "", json: "" };
+			const current = state.chatToolCalls.get(index) ?? {
+				id: "",
+				name: "",
+				json: "",
+			};
 			if (call.id) current.id = call.id;
 			if (call.function?.name) current.name = call.function.name;
 			if (call.function?.arguments) current.json += call.function.arguments;
@@ -414,32 +826,56 @@ function processChatCompatibleStreamEvent(state: OpenAIStreamState, event: OpenA
 	state.requestId = event._request_id ?? state.requestId;
 }
 
-function appendTextDelta(state: OpenAIStreamState, delta: string | null | undefined, request: ModelRequest): void {
+function appendTextDelta(
+	state: OpenAIStreamState,
+	delta: string | null | undefined,
+	request: ModelRequest,
+): void {
 	if (!delta) return;
 	state.fullText += delta;
 	request.streamCallbacks?.onTextDelta?.(delta, state.fullText);
 }
 
-function appendReasoningDelta(state: OpenAIStreamState, delta: string | null | undefined, request: ModelRequest): void {
+function appendReasoningDelta(
+	state: OpenAIStreamState,
+	delta: string | null | undefined,
+	request: ModelRequest,
+): void {
 	if (!delta) return;
 	state.reasoningParts.push(delta);
-	request.streamCallbacks?.onReasoningDelta?.(delta, state.reasoningParts.join(""));
+	request.streamCallbacks?.onReasoningDelta?.(
+		delta,
+		state.reasoningParts.join(""),
+	);
 }
 
-function startOutputItem(state: OpenAIStreamState, item: OpenAIOutputItemLike | undefined): void {
+function startOutputItem(
+	state: OpenAIStreamState,
+	item: OpenAIOutputItemLike | undefined,
+): void {
 	if (item?.type === "function_call") {
-		state.pendingCall = { id: item.call_id ?? item.id ?? "", name: item.name ?? "", json: "" };
+		state.pendingCall = {
+			id: item.call_id ?? item.id ?? "",
+			name: item.name ?? "",
+			json: "",
+		};
 	} else if (item?.type === "reasoning") {
 		const reasoning = parseReasoning({ output: item });
 		if (reasoning) state.reasoningParts.push(reasoning);
 	}
 }
 
-function appendPendingCallDelta(state: OpenAIStreamState, delta: string | null | undefined): void {
+function appendPendingCallDelta(
+	state: OpenAIStreamState,
+	delta: string | null | undefined,
+): void {
 	if (state.pendingCall && delta) state.pendingCall.json += delta;
 }
 
-function finishOutputItem(state: OpenAIStreamState, item: OpenAIOutputItemLike | undefined): void {
+function finishOutputItem(
+	state: OpenAIStreamState,
+	item: OpenAIOutputItemLike | undefined,
+): void {
 	if (state.pendingCall) {
 		state.toolCalls.push(state.pendingCall);
 		delete state.pendingCall;
@@ -450,20 +886,41 @@ function finishOutputItem(state: OpenAIStreamState, item: OpenAIOutputItemLike |
 	}
 }
 
-function streamResponseFromState(state: OpenAIStreamState, request: ModelRequest): ModelResponse {
-	const rawCalls = [...state.toolCalls, ...state.chatToolCalls.values()].filter((call) => call.id && call.name);
-	const toolCalls = rawCalls.map((call) => ({ id: call.id, name: call.name, input: parseToolInput(call.json) }));
-	const policy = resolveReasoningPolicy(request.agent.model, "openai-responses");
-	const reasoning = shouldReturnReasoning(policy, toolCalls) ? joinUnique(state.reasoningParts) : undefined;
+function streamResponseFromState(
+	state: OpenAIStreamState,
+	request: ModelRequest,
+): ModelResponse {
+	const rawCalls = [...state.toolCalls, ...state.chatToolCalls.values()].filter(
+		(call) => call.id && call.name,
+	);
+	const toolCalls = rawCalls.map((call) => ({
+		id: call.id,
+		name: call.name,
+		input: parseToolInput(call.json),
+	}));
+	const policy = resolveReasoningPolicy(
+		request.agent.model,
+		"openai-responses",
+	);
+	const reasoning = shouldReturnReasoning(policy, toolCalls)
+		? joinUnique(state.reasoningParts)
+		: undefined;
 	return {
 		text: state.fullText,
-		...(reasoning ? { reasoning } : {}),
+		...(reasoning !== undefined ? { reasoning } : {}),
 		...(toolCalls.length > 0 ? { toolCalls } : {}),
 		...(state.requestId ? { requestId: state.requestId } : {}),
 		...(state.usage ? { usage: state.usage } : {}),
 		metadata: {
 			...(state.requestId ? { requestId: state.requestId } : {}),
-			...(state.usage ? { usage: { input_tokens: state.usage.inputTokens, output_tokens: state.usage.outputTokens } } : {}),
+			...(state.usage
+				? {
+						usage: {
+							input_tokens: state.usage.inputTokens,
+							output_tokens: state.usage.outputTokens,
+						},
+					}
+				: {}),
 		},
 	};
 }
@@ -473,10 +930,14 @@ function joinUnique(parts: string[]): string | undefined {
 	if (nonEmpty.length === 0) return undefined;
 	const combined = nonEmpty.join("");
 	const last = nonEmpty[nonEmpty.length - 1]!;
-	return nonEmpty.length > 1 && combined.slice(0, -last.length) === last ? last : combined;
+	return nonEmpty.length > 1 && combined.slice(0, -last.length) === last
+		? last
+		: combined;
 }
 
-function parseChoiceText(content: OpenAIChatMessageLike["content"]): string | undefined {
+function parseChoiceText(
+	content: OpenAIChatMessageLike["content"],
+): string | undefined {
 	if (typeof content === "string") return nonEmptyString(content);
 	if (Array.isArray(content)) return joinedText(content);
 	return content ? joinedText([content]) : undefined;
@@ -485,15 +946,20 @@ function parseChoiceText(content: OpenAIChatMessageLike["content"]): string | un
 function parseOutputText(response: OpenAIResponseLike): string {
 	const parts: string[] = [];
 	for (const item of outputItems(response)) {
-		if (typeof item.content === "string" && item.type !== "reasoning") parts.push(item.content);
-		else if (Array.isArray(item.content)) parts.push(...textContentParts(item.content));
-		else if (item.content && typeof item.content === "object") parts.push(...textContentParts([item.content]));
+		if (typeof item.content === "string" && item.type !== "reasoning")
+			parts.push(item.content);
+		else if (Array.isArray(item.content))
+			parts.push(...textContentParts(item.content));
+		else if (item.content && typeof item.content === "object")
+			parts.push(...textContentParts([item.content]));
 	}
 	return parts.join("");
 }
 
 function textContentParts(content: OpenAIOutputContentLike[]): string[] {
-	return content.map((item) => item.text ?? item.content ?? "").filter((text) => text.length > 0);
+	return content
+		.map((item) => item.text ?? item.content ?? "")
+		.filter((text) => text.length > 0);
 }
 
 function joinedText(content: OpenAIOutputContentLike[]): string | undefined {
@@ -505,7 +971,13 @@ function nonEmptyString(value: string | null | undefined): string | undefined {
 }
 
 function reasoningContentParts(content: OpenAIOutputContentLike[]): string[] {
-	return content.map((item) => item.reasoning_content ?? (item.type === "reasoning" ? item.text ?? item.content ?? "" : "")).filter((text) => text.length > 0);
+	return content
+		.map(
+			(item) =>
+				item.reasoning_content ??
+				(item.type === "reasoning" ? (item.text ?? item.content ?? "") : ""),
+		)
+		.filter((text) => text.length > 0);
 }
 
 function parseArguments(value: string): unknown {
@@ -518,14 +990,49 @@ function parseArguments(value: string): unknown {
 
 function normalizeUsage(value: unknown): ModelUsage | undefined {
 	const usage = objectRecord(value);
-	const rawInputTokens = numberAny(usage, ["input_tokens", "prompt_tokens", "inputTokens"]);
-	const outputTokens = numberAny(usage, ["output_tokens", "completion_tokens", "outputTokens"]);
-	const reasoningTokens = numberField(objectRecord(usage.output_tokens_details), "reasoning_tokens") ?? numberField(objectRecord(usage.completion_tokens_details), "reasoning_tokens") ?? numberField(usage, "reasoning_tokens");
-	const cacheReadTokens = numberField(objectRecord(usage.input_tokens_details), "cached_tokens") ?? numberField(objectRecord(usage.prompt_tokens_details), "cached_tokens") ?? numberField(usage, "cached_tokens");
-	const inputTokens = rawInputTokens === undefined ? undefined : Math.max(0, rawInputTokens - (cacheReadTokens ?? 0));
-	const totalTokens = numberAny(usage, ["total_tokens", "totalTokens"]) ?? sumKnown([inputTokens, cacheReadTokens, outputTokens]);
+	const rawInputTokens = numberAny(usage, [
+		"input_tokens",
+		"prompt_tokens",
+		"inputTokens",
+	]);
+	const outputTokens = numberAny(usage, [
+		"output_tokens",
+		"completion_tokens",
+		"outputTokens",
+	]);
+	const reasoningTokens =
+		numberField(
+			objectRecord(usage.output_tokens_details),
+			"reasoning_tokens",
+		) ??
+		numberField(
+			objectRecord(usage.completion_tokens_details),
+			"reasoning_tokens",
+		) ??
+		numberField(usage, "reasoning_tokens");
+	const cacheReadTokens =
+		numberField(objectRecord(usage.input_tokens_details), "cached_tokens") ??
+		numberField(objectRecord(usage.prompt_tokens_details), "cached_tokens") ??
+		numberField(usage, "cached_tokens");
+	const inputTokens =
+		rawInputTokens === undefined
+			? undefined
+			: Math.max(0, rawInputTokens - (cacheReadTokens ?? 0));
+	const totalTokens =
+		numberAny(usage, ["total_tokens", "totalTokens"]) ??
+		sumKnown([inputTokens, cacheReadTokens, outputTokens]);
 	const costUsd = numberAny(usage, ["cost_usd", "costUsd", "cost"]);
-	if ([inputTokens, outputTokens, totalTokens, reasoningTokens, cacheReadTokens, costUsd].every((item) => item === undefined)) return undefined;
+	if (
+		[
+			inputTokens,
+			outputTokens,
+			totalTokens,
+			reasoningTokens,
+			cacheReadTokens,
+			costUsd,
+		].every((item) => item === undefined)
+	)
+		return undefined;
 	return {
 		...(inputTokens === undefined ? {} : { inputTokens }),
 		...(outputTokens === undefined ? {} : { outputTokens }),
@@ -537,19 +1044,27 @@ function normalizeUsage(value: unknown): ModelUsage | undefined {
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {
-	return value && typeof value === "object" ? value as Record<string, unknown> : {};
+	return value && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: {};
 }
 
 function normalizeBaseURL(baseURL = "https://api.openai.com/v1"): string {
 	return baseURL.replace(/\/+$/, "");
 }
 
-function numberField(value: Record<string, unknown>, key: string): number | undefined {
+function numberField(
+	value: Record<string, unknown>,
+	key: string,
+): number | undefined {
 	const item = value[key];
 	return typeof item === "number" && Number.isFinite(item) ? item : undefined;
 }
 
-function numberAny(value: Record<string, unknown>, keys: string[]): number | undefined {
+function numberAny(
+	value: Record<string, unknown>,
+	keys: string[],
+): number | undefined {
 	for (const key of keys) {
 		const item = numberField(value, key);
 		if (item !== undefined) return item;

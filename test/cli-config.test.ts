@@ -112,7 +112,7 @@ describe("parseCliDefaults", () => {
 
 		expect(result.defaults).toEqual({});
 		expect(result.diagnostics).toEqual([
-			"config.providerFormat must be openai-responses or anthropic-messages",
+			"config.providerFormat must be openai-responses, openai-chat, or anthropic-messages",
 			"config.toolProfile must be read-only, coding, benchmark-sandbox, or dangerous",
 		]);
 	});
@@ -128,7 +128,7 @@ describe("parseCliDefaults", () => {
 		});
 
 		expect(result.diagnostics).toEqual([
-			"config.providers.bad.format must be openai-responses or anthropic-messages",
+			"config.providers.bad.format must be openai-responses, openai-chat, or anthropic-messages",
 			"config.models.aliases.small.model must be a non-empty string",
 			"config.models.aliases.small.reasoningLevel must be off, minimal, low, medium, high, or xhigh",
 			"config.models.routes.unknown is not a supported model purpose",

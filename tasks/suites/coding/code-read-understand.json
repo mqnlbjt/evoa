@@ -1,0 +1,86 @@
+{
+  "id": "coding-read",
+  "name": "代码阅读理解",
+  "description": "读代码回答问题的场景，评估 Agent 的代码理解能力",
+  "tasks": [
+    {
+      "id": "coding-read-simple-function",
+      "type": "coding",
+      "title": "函数用途识别",
+      "prompt": "阅读 /workspace/utils.ts 中的 calculateTotal 函数，回答：这个函数接收什么参数？返回什么？有没有 bug？",
+      "fixtures": [
+        {
+          "path": "utils.ts",
+          "content": "interface Order {\n  items: { price: number; quantity: number }[];\n  taxRate: number;\n  discount: number;\n}\n\nfunction calculateTotal(order: Order): number {\n  const subtotal = order.items.reduce((sum, item) => sum + item.price * item.quantity, 0);\n  const tax = subtotal * order.taxRate;\n  const final = subtotal + tax - order.discount;\n  return final;\n}\n\nexport { calculateTotal, type Order };\n"
+        }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "Order对象", "weight": 2, "required": true },
+            { "description": "number", "weight": 2, "required": true },
+            { "description": "subtotal", "weight": 2 },
+            { "description": "没有bug", "weight": 2 },
+            { "description": "负数", "weight": 2 }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": []
+    },
+    {
+      "id": "coding-read-bug-detection",
+      "type": "coding",
+      "title": "Bug 检测",
+      "prompt": "阅读 /workspace/validate.py 中的 validate_email 函数，找出其中的 bug 并描述修复方法。",
+      "fixtures": [
+        {
+          "path": "validate.py",
+          "content": "def validate_email(email: str) -> bool:\n    # BUG: does not check for double dots\n    # BUG: allows spaces\n    if '@' not in email:\n        return False\n    local, domain = email.split('@')\n    if len(local) == 0 or len(domain) == 0:\n        return False\n    if '.' not in domain:\n        return False\n    # BUG: does not check domain TLD length\n    return True\n"
+        }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "双点", "weight": 2, "required": true },
+            { "description": "空格", "weight": 2, "required": true },
+            { "description": "TLD", "weight": 2 },
+            { "description": "修复", "weight": 4, "required": true }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": []
+    },
+    {
+      "id": "coding-read-algorithm-complexity",
+      "type": "coding",
+      "title": "算法复杂度分析",
+      "prompt": "分析 /workspace/search.js 中 binarySearch 和 linearSearch 的时间复杂度和空间复杂度，在什么场景下哪个更好？",
+      "fixtures": [
+        {
+          "path": "search.js",
+          "content": "function linearSearch(arr, target) {\n    for (let i = 0; i < arr.length; i++) {\n        if (arr[i] === target) return i;\n    }\n    return -1;\n}\n\nfunction binarySearch(arr, target) {\n    let left = 0, right = arr.length - 1;\n    while (left <= right) {\n        const mid = Math.floor((left + right) / 2);\n        if (arr[mid] === target) return mid;\n        if (arr[mid] < target) left = mid + 1;\n        else right = mid - 1;\n    }\n    return -1;\n}\n\nmodule.exports = { linearSearch, binarySearch };\n"
+        }
+      ],
+      "scoring": {
+        "method": "rubric",
+        "maxScore": 10,
+        "config": {
+          "criteria": [
+            { "description": "O(n)", "weight": 2, "required": true },
+            { "description": "O(log n)", "weight": 2, "required": true },
+            { "description": "O(1)", "weight": 2 },
+            { "description": "已排序", "weight": 2 },
+            { "description": "未排序", "weight": 2 }
+          ],
+          "passThreshold": 0.5
+        }
+      }
+    }
+  ]
+}

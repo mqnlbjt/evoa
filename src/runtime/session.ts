@@ -169,7 +169,7 @@ export function appendAssistantEntry(session: AgentSession, response: ModelRespo
 		role: "assistant",
 		content: response.text ?? "",
 		contentBlocks: [
-			...(response.reasoning ? [{ type: "reasoning" as const, text: response.reasoning }] : []),
+			...(response.reasoning !== undefined ? [{ type: "reasoning" as const, text: response.reasoning, ...(response.reasoningSignature ? { signature: response.reasoningSignature } : {}) }] : []),
 			...(response.text ? [{ type: "text" as const, text: response.text }] : []),
 			...(response.toolCalls?.map((call) => ({
 				type: "tool_call" as const,

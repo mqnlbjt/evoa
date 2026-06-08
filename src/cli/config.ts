@@ -50,11 +50,11 @@ function copyString(source: Record<string, unknown>, key: StringDefaultKey, targ
 
 function copyProviderFormat(value: unknown, target: CliDefaults, diagnostics: string[]): void {
 	if (value === undefined) return;
-	if (value === "openai-responses" || value === "anthropic-messages") {
+	if (value === "openai-responses" || value === "openai-chat" || value === "anthropic-messages") {
 		target.providerFormat = value;
 		return;
 	}
-	diagnostics.push("config.providerFormat must be openai-responses or anthropic-messages");
+	diagnostics.push("config.providerFormat must be openai-responses, openai-chat, or anthropic-messages");
 }
 
 function copyProviders(value: unknown, target: CliDefaults, diagnostics: string[]): void {
@@ -270,8 +270,8 @@ function parseRemoteMcpServer(value: Record<string, unknown>, type: "http" | "ss
 }
 
 function providerFormatValue(value: unknown, pathName: string, diagnostics: string[]): ProviderFormat | undefined {
-	if (value === "openai-responses" || value === "anthropic-messages") return value;
-	diagnostics.push(`${pathName} must be openai-responses or anthropic-messages`);
+	if (value === "openai-responses" || value === "openai-chat" || value === "anthropic-messages") return value;
+	diagnostics.push(`${pathName} must be openai-responses, openai-chat, or anthropic-messages`);
 	return undefined;
 }
 

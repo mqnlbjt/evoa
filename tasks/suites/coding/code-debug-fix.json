@@ -1,0 +1,53 @@
+{
+  "id": "coding-debug",
+  "name": "代码调试与修复",
+  "description": "调试和修复 bug 的场景，使用多种评分方法验证修复结果",
+  "tasks": [
+    {
+      "id": "coding-debug-division",
+      "type": "coding",
+      "title": "修复除零错误",
+      "prompt": "修复 /workspace/stats.py 中的 average 函数。当输入空列表时抛出了 ZeroDivisionError，请添加适当的错误处理并确保返回合理的值。同时修复列表包含非数字元素时的问题。",
+      "fixtures": [
+        {
+          "path": "stats.py",
+          "content": "def average(numbers):\n    \"\"\"Calculate the average of a list of numbers.\"\"\"\n    total = sum(numbers)\n    count = len(numbers)\n    return total / count  # BUG: ZeroDivisionError on empty list\n\ndef median(numbers):\n    \"\"\"Calculate the median\"\"\"\n    sorted_nums = sorted(numbers)\n    n = len(sorted_nums)\n    mid = n // 2\n    return sorted_nums[mid]  # BUG: doesn't handle even-length correctly\n\ndef stats(numbers):\n    \"\"\"Return dict with avg, median, min, max\"\"\"\n    return {\n        \"avg\": average(numbers),\n        \"median\": median(numbers),\n        \"min\": min(numbers),  # BUG: ValueError on empty list\n        \"max\": max(numbers),  # BUG: ValueError on empty list\n        \"count\": len(numbers)\n    }\n"
+        }
+      ],
+      "scoring": {
+        "method": "artifact",
+        "maxScore": 10,
+        "config": {
+          "path": "stats.py",
+          "contains": ["empty", "ValueError", "len(numbers)"],
+          "minHeightLines": 20
+        }
+      },
+      "expectedArtifacts": ["stats.py"]
+    },
+    {
+      "id": "coding-debug-async-race",
+      "type": "coding",
+      "title": "修复异步竞态条件",
+      "prompt": "修复 /workspace/cache.ts 中的竞态条件。fetchWithCache 在同一个 key 被并发调用时可能多次请求源数据。添加一个 Promise 去重机制，确保同一 key 的并发请求只发起一次源调用。",
+      "fixtures": [
+        {
+          "path": "cache.ts",
+          "content": "const cache = new Map<string, { data: unknown; expiry: number }>();\n\nasync function fetchFromSource(key: string): Promise<unknown> {\n  await new Promise(r => setTimeout(r, 100));\n  return { key, value: Math.random() };\n}\n\n// BUG: concurrent calls for the same key each\n// trigger a separate source fetch, causing\n// inconsistency and wasted resources.\nexport async function fetchWithCache(key: string, ttlMs = 5000): Promise<unknown> {\n  const cached = cache.get(key);\n  if (cached && cached.expiry > Date.now()) {\n    return cached.data;\n  }\n  const data = await fetchFromSource(key);\n  cache.set(key, { data, expiry: Date.now() + ttlMs });\n  return data;\n}\n\nexport function clearCache(): void {\n  cache.clear();\n}\n"
+        }
+      ],
+      "scoring": {
+        "method": "custom",
+        "maxScore": 10,
+        "config": {
+          "subscores": [
+            { "method": "artifact", "weight": 2, "config": { "path": "cache.ts", "contains": ["Promise", "pending", "inFlight"] } },
+            { "method": "rubric", "weight": 8, "config": { "criteria": [{ "description": "inFlight", "required": true }, { "description": "Promise", "required": true }, { "description": "去重", "required": true }, { "description": "delete", "weight": 1 }, { "description": "finally", "weight": 1 }], "passThreshold": 0.6 } }
+          ],
+          "passThreshold": 0.6
+        }
+      },
+      "expectedArtifacts": ["cache.ts"]
+    }
+  ]
+}
