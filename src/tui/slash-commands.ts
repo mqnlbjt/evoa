@@ -1,5 +1,6 @@
 import { formatTable } from "../cli/format.js";
 import type { ChatServiceContext } from "../cli/chat-service.js";
+import type { MemoryItem } from "../memory/types.js";
 import type { EvolutionHistoryRecord } from "../evolution/history-store.js";
 import type { TuiState } from "./state.js";
 import type { TuiView } from "./types.js";
@@ -41,7 +42,7 @@ export async function handleSlashCommand(input: string, context: SlashCommandCon
 	if (name === "/stats") return switchView(context, "stats");
 	if (name === "/chat") return switchView(context, "chat");
 	if (name === "/tools") return message(toolsText(context));
-	if (name === "/memory") return message(memoryText(context));
+	if (name === "/memory") return message(await memoryText(context, args));
 	if (name === "/trace") return message(traceText(context, args));
 	if (name === "/trace-page") return switchView(context, "trace");
 	if (name === "/evolve-history") return handleEvolveHistoryCommand(context, args);
@@ -68,7 +69,7 @@ function helpText(): string {
 		"/stats   Show stats page",
 		"/chat    Show chat page",
 		"/tools   List available tools",
-		"/memory  Show memory status",
+		"/memory [query] Show memory status or search memory",
 		"/trace   Show recent trace events",
 		"/trace N Show recent N trace events (max 50)",
 		"/trace-page Show trace page",
@@ -120,8 +121,53 @@ function toolsText(context: SlashCommandContext): string {
 	return formatTable(rows);
 }
 
-function memoryText(context: SlashCommandContext): string {
-	return context.chat.memoryManager ? "memory: enabled" : "memory: disabled";
+async function memoryText(context: SlashCommandContext, args: string[]): Promise<string> {
+	const manager = context.chat.memoryManager;
+	if (!manager) return "memory: disabled";
+	const query = args.join(" ").trim();
+	try {
+		if (query) return memorySearchText(await manager.search({ ...memoryRequest(context, query), query }), query);
+		const items = await manager.loadContextItems(memoryRequest(context, lastUserPrompt(context)));
+		return memorySummaryText(context, items.stable, items.dynamic);
+	} catch (error) {
+		return `memory: error\n${error instanceof Error ? error.message : String(error)}`;
+	}
+}
+
+function memoryRequest(context: SlashCommandContext, prompt: string) {
+	return { agentId: context.chat.agent.id, sessionId: context.chat.sessionId, projectId: context.chat.memoryProjectId, prompt, now: context.chat.now };
+}
+
+function memorySummaryText(context: SlashCommandContext, stable: MemoryItem[], dynamic: MemoryItem[]): string {
+	return [
+		"memory: enabled",
+		`agent: ${context.chat.agent.id}`,
+		`session: ${context.chat.sessionId}`,
+		`project: ${context.chat.memoryProjectId}`,
+		`stable: ${stable.length}`,
+		`dynamic: ${dynamic.length}`,
+		memoryPreviewTable([...stable, ...dynamic], 3, 56),
+	].filter(Boolean).join("\n");
+}
+
+function memorySearchText(items: MemoryItem[], query: string): string {
+	return [`memory search: ${query}`, `matches: ${items.length}`, memoryPreviewTable(items, 10, 80)].filter(Boolean).join("\n");
+}
+
+function memoryPreviewTable(items: MemoryItem[], limit: number, contentMaxLength: number): string {
+	if (items.length === 0) return "No memory items found";
+	return formatTable([["SCOPE", "LAYER", "ID", "CONTENT"], ...items.slice(0, limit).map((item) => [item.scope ?? "agent", item.layer, item.id, truncate(item.content, contentMaxLength)])]);
+}
+
+function lastUserPrompt(context: SlashCommandContext): string {
+	for (const entry of [...context.chat.messages].reverse()) {
+		if (entry.role === "user" && entry.content.trim()) return entry.content;
+	}
+	return "";
+}
+
+function truncate(text: string, maxLength: number): string {
+	return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }
 
 function traceText(context: SlashCommandContext, args: string[]): string {

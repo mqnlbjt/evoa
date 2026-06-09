@@ -46,6 +46,7 @@ export interface ChatServiceContext {
 	createId: () => string;
 	toolRegistry: ToolRegistry;
 	memoryManager?: MemoryManager;
+	memoryProjectId: string;
 	eventObserver?: TraceEventObserver;
 }
 
@@ -68,6 +69,7 @@ export async function createChatServiceContext(command: ChatCommand | TuiCommand
 	const agent = effectiveAgentForCommand(bundle.agent, resolvedCommand);
 	const sessionId = resolvedCommand.resumeSessionId ?? resolvedCommand.sessionId ?? (deps.createId?.() ?? crypto.randomUUID());
 	const modelClient = createRoutedModelClient(resolvedCommand, deps, agent);
+	const memoryProjectId = memoryProjectIdForCommand(resolvedCommand);
 	const memoryManager = createMemoryManager(agent, resolvedCommand, modelClient);
 	const toolRegistry = createChatToolRegistry(resolvedCommand, deps);
 	registerMemoryTools(toolRegistry, resolvedCommand, deps, memoryManager);
@@ -84,6 +86,7 @@ export async function createChatServiceContext(command: ChatCommand | TuiCommand
 		now: deps.now ?? Date.now,
 		createId: deps.createId ?? (() => crypto.randomUUID()),
 		toolRegistry,
+		memoryProjectId,
 		...(memoryManager ? { memoryManager } : {}),
 		...(options.eventObserver ? { eventObserver: options.eventObserver } : {}),
 	};
@@ -129,7 +132,7 @@ export async function runChatTurn(context: ChatServiceContext, prompt: string, s
 async function finalizeChatTurn(context: ChatServiceContext, session: AgentSession, startMessageIndex: number, recordMemory: boolean): Promise<void> {
 	context.messages = session.messages;
 	context.entries = session.entries ?? entriesFromMessages(session.messages);
-	if (recordMemory) context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: memoryProjectId(context.command), messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId, force: true }).catch(() => {});
+	if (recordMemory) context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: context.memoryProjectId, messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId, force: true }).catch(() => {});
 	if (!context.command.resumeSessionId && !context.command.sessionId) return;
 	const stored = storedSession(context.sessionId, context.agent, context.command, session, context.stored, context.now());
 	await context.sessionStore.saveSession(stored);
@@ -167,7 +170,7 @@ export async function createRuntimeForCommand(command: ResolvedChatCommand | Run
 		modelClient,
 		toolRegistry,
 		createToolRegistryForAgent,
-		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectId(command), prompt: session.task.prompt, now: deps.now ?? Date.now }) } : {}),
+		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectIdForCommand(command), prompt: session.task.prompt, now: deps.now ?? Date.now }) } : {}),
 		...(subagents.length > 0 ? { subagents } : {}),
 		...(deps.now ? { now: deps.now } : {}),
 		...(deps.createId ? { createId: deps.createId } : {}),
@@ -191,7 +194,7 @@ function createMemoryManager(agent: AgentSpec, command: ResolvedChatCommand, mod
 
 function registerMemoryTools(toolRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): void {
 	if (!memoryManager || toolRegistry.get("memory_context")) return;
-	for (const tool of createMemoryTools({ manager: memoryManager, projectId: memoryProjectId(command), now: deps.now ?? Date.now, createId: deps.createId ?? (() => crypto.randomUUID()) })) {
+	for (const tool of createMemoryTools({ manager: memoryManager, projectId: memoryProjectIdForCommand(command), now: deps.now ?? Date.now, createId: deps.createId ?? (() => crypto.randomUUID()) })) {
 		toolRegistry.register(tool);
 	}
 }
@@ -204,7 +207,7 @@ function createRuntime(command: ResolvedChatCommand, deps: ChatServiceDeps, suba
 		modelClient,
 		toolRegistry,
 		createToolRegistryForAgent,
-		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectId(command), prompt: session.task.prompt, now }) } : {}),
+		...(memoryManager ? { memoryContextProvider: (session) => memoryManager.loadContext({ agentId: session.agent.id, sessionId: session.id, projectId: memoryProjectIdForCommand(command), prompt: session.task.prompt, now }) } : {}),
 		...(subagents.length > 0 ? { subagents } : {}),
 		...(deps.now ? { now } : {}),
 		...(deps.createId ? { createId } : {}),
@@ -387,7 +390,7 @@ function commandAgent(command: ResolvedChatCommand | RunCommand | BenchmarkComma
 	};
 }
 
-function memoryProjectId(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): string {
+function memoryProjectIdForCommand(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand): string {
 	return command.kind === "chat" ? chatStorageRoot(command) : process.cwd();
 }
 
