@@ -6,7 +6,7 @@ import type { SOPSpec } from "../src/sop/types.js";
 import type { ToolExecutionContext } from "../src/tools/types.js";
 import type { ToolRegistry } from "../src/tools/registry.js";
 import type { ModelMessage } from "../src/models/types.js";
-import type { AgentSession } from "../runtime/session.js";
+import type { AgentSession } from "../src/runtime/session.js";
 import type { Skill } from "../src/skills/types.js";
 
 function makeSOPSpec(id: string, name: string): SOPSpec {
@@ -46,7 +46,7 @@ function makeSession(): AgentSession {
     },
     messages: [{ role: "system", content: "You are a test agent." }],
     entries: [],
-    startTime: Date.now(),
+    trace: [],
     turnCount: 0,
     toolCallCount: 0,
   };

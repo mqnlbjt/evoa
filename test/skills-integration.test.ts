@@ -8,13 +8,14 @@ import { depositSopDirectoryToSkillBank } from "../src/skills/sop-bridge.js";
 import { createSkillTool, createSkillContextTransform } from "../src/skills/skill-tool.js";
 import { parseMarketSkillContent, marketSkillToSopSpec } from "../src/skills/market-converter.js";
 import type { ToolRegistry } from "../src/tools/registry.js";
+import type { EvolvingAgentTool } from "../src/tools/types.js";
 
 function fakeToolRegistry(): ToolRegistry {
-  const tools = new Map();
+  const tools = new Map<string, EvolvingAgentTool>();
   return {
-    get(name) { return tools.get(name); },
+    get(name: string) { return tools.get(name); },
     list() { return Array.from(tools.values()); },
-    register(tool) { tools.set(tool.name, tool); },
+    register(tool: EvolvingAgentTool) { tools.set(tool.name, tool); },
     clone() { return fakeToolRegistry(); },
     execute: () => { throw new Error("not implemented"); },
     close() { return Promise.resolve(); },
@@ -189,7 +190,7 @@ Process the input by doing the following:
       tools: { allowedTools: [] },
       runtime: { maxTurns: 5 },
     };
-    expect(agent.skills).toBeUndefined();
+    expect("skills" in agent).toBe(false);
   });
 
   it("skip when skills.enabled is false", () => {

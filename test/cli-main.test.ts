@@ -95,7 +95,7 @@ describe("CLI main", () => {
 
 		expect(code).toBe(0);
 		expect(io.stdoutText()).toBe("");
-		expect(terminal.outputText()).toContain("evolving-agent | Basic Agent");
+		expect(terminal.outputText()).toContain("evoa | Basic Agent");
 		expect(terminal.isDisposed()).toBe(true);
 	});
 

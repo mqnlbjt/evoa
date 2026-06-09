@@ -32,4 +32,4 @@ npm publish
 
 echo ""
 echo "✅ 发布成功！"
-echo "  https://www.npmjs.com/package/evoa"
+echo "  https://www.npmjs.com/package/@wqqqyyz/evoa"

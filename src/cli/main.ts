@@ -9,7 +9,7 @@ export type { CliDeps } from "./commands.js";
 export async function main(args: string[], deps: CliDeps = {}): Promise<number> {
 	const stdout = deps.stdout ?? process.stdout;
 	const stderr = deps.stderr ?? process.stderr;
-	const config = await loadCliDefaults(configPathFromArgs(args));
+	const config = await loadCliDefaults(configPathFromArgs(args), deps.configCwd);
 	const parsed = parseCliArgs(args, config.defaults);
 	const format = parsed.command?.format ?? (args.includes("--json") || args.includes("--format") && args.includes("json") ? "json" : "human");
 	const diagnostics = [...config.diagnostics, ...parsed.diagnostics];

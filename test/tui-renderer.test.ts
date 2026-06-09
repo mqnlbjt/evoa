@@ -18,7 +18,7 @@ describe("renderTui", () => {
 		state.addUserMessage("hello");
 		state.addSystemMessage("# title\n- item\n```\ncode\n```");
 		const output = renderTui(state.snapshot(), new InputEditor(), { width: 80, height: 20, now: 2 });
-		expect(output).toContain("evolving-agent | Agent");
+		expect(output).toContain("evoa | Agent");
 		expect(output).toContain("┃ You  hello");
 		expect(output).toContain("status: idle");
 		expect(output).not.toContain("task:");

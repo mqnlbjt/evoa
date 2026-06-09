@@ -5,6 +5,7 @@ export interface TestIO {
 	stderr: { write: (chunk: string) => boolean };
 	stdoutText: () => string;
 	stderrText: () => string;
+	configCwd: string;
 }
 
 export function createIO(): TestIO {
@@ -15,6 +16,7 @@ export function createIO(): TestIO {
 		stderr: { write: (chunk: string) => { stderr += chunk; return true; } },
 		stdoutText: () => stdout,
 		stderrText: () => stderr,
+		configCwd: "/tmp/evoa-test-no-config",
 	};
 }
 

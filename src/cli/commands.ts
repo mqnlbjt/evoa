@@ -61,6 +61,7 @@ export interface CliDeps {
 	createId?: () => string;
 	createTerminal?: () => Terminal;
 	mcpClientFactory?: (serverName: string, config: McpServersConfig[string]) => Promise<McpClientHandle>;
+	configCwd?: string;
 }
 
 export interface CliResult {

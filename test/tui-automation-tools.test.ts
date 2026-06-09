@@ -35,7 +35,7 @@ describe("TUI automation tools", () => {
 
 		expect(start.status).toBe("success");
 		expect(start.output).toMatchObject({ status: "running", size: { width: 80, height: 12 } });
-		expect(snapshotPlain(start.output)).toContain("evolving-agent | TUI Basic");
+		expect(snapshotPlain(start.output)).toContain("evoa | TUI Basic");
 		await registry.close();
 	});
 

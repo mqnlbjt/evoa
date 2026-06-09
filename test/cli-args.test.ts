@@ -19,8 +19,8 @@ describe("parseCliArgs", () => {
 	});
 
 	it("includes MCP commands in help text", () => {
-		expect(helpText()).toContain("evolving-agent mcp status");
-		expect(helpText()).toContain("evolving-agent mcp diagnostics");
+		expect(helpText()).toContain("evoa mcp status");
+		expect(helpText()).toContain("evoa mcp diagnostics");
 	});
 
 	it("parses chat", () => {

@@ -207,7 +207,7 @@ describe("InteractiveMode", () => {
 			now: () => 1,
 		});
 		const narrowExit = narrowMode.start();
-		await waitFor(() => narrowTerminal.outputText().includes("evolv"));
+		await waitFor(() => narrowTerminal.outputText().includes("evoa"));
 		narrowTerminal.emitInput("你好世界");
 		await waitFor(() => frameText(narrowTerminal).includes("> 你好"));
 		expect(narrowTerminal.cursorPosition().column).toBe(6);

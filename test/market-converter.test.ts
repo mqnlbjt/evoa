@@ -105,9 +105,9 @@ describe("marketSkillToSopSpec", () => {
     // steps
     const promptStep = sop.steps[sop.steps.length - 1];
     expect(promptStep?.id).toBe("run");
-    expect(promptStep?.action.type).toBe("prompt");
-    expect(promptStep?.action.template).toBe(body);
-    expect(promptStep?.verification?.method).toBe("regex");
+    if (promptStep?.action.type !== "prompt") throw new Error("expected prompt action");
+    expect(promptStep.action.template).toBe(body);
+    expect(promptStep.verification?.method).toBe("regex");
 
     // timeout
     expect(sop.timeoutMs).toBe(5000);
@@ -138,8 +138,9 @@ describe("marketSkillToSopSpec", () => {
     const sop = marketSkillToSopSpec(config, "body");
     const checkStep = sop.steps.find((s) => s.id === "check_tools");
     expect(checkStep).toBeDefined();
-    expect(checkStep?.action.template).toContain("unknown_tool");
-    expect(checkStep?.action.template).toContain("another_unknown");
+    if (checkStep?.action.type !== "prompt") throw new Error("expected prompt action");
+    expect(checkStep.action.template).toContain("unknown_tool");
+    expect(checkStep.action.template).toContain("another_unknown");
   });
 
   it("skips check_tools for known tools only", () => {
