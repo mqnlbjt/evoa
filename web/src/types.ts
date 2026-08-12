@@ -187,6 +187,8 @@ export interface SessionSummary {
 	createdAt: number;
 	updatedAt: number;
 	preview: string;
+	/** 是否为当前正在进行的会话（前端区分 active/历史）。 */
+	active: boolean;
 }
 
 export interface ChatStateSnapshot {

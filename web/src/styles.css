@@ -413,52 +413,35 @@ body::before {
 	animation: pulse 1.2s ease-in-out infinite;
 }
 
-/* ---------- Sessions 抽屉 ---------- */
+/* ---------- Sessions 常驻面板 ---------- */
 
-.sessions-drawer {
-	position: fixed;
-	left: 64px;
-	top: 12px;
+.sessions-panel {
 	width: 300px;
-	max-height: min(520px, calc(100vh - 24px));
+	min-width: 300px;
 	display: flex;
 	flex-direction: column;
-	background: var(--glass);
-	backdrop-filter: blur(20px);
-	-webkit-backdrop-filter: blur(20px);
-	border: 1px solid var(--border-strong);
-	border-radius: 14px;
-	box-shadow: var(--shadow-card);
-	z-index: 150;
+	background: var(--bg-elev);
+	border-right: 1px solid var(--border);
 	padding: 10px;
-	opacity: 0;
-	visibility: hidden;
-	transform: translateY(-6px);
-	pointer-events: none;
-	transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-}
-.sessions-drawer.drawer-open {
-	opacity: 1;
-	visibility: visible;
-	transform: none;
-	pointer-events: auto;
+	overflow: hidden;
 }
 
-.sessions-drawer .sessions-drawer-head {
+.sessions-panel-head {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 	padding: 4px 6px 10px;
 }
-.sessions-drawer .sessions-drawer-title {
+.sessions-panel-title {
 	font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
 	font-size: 11px;
 	letter-spacing: 0.16em;
 	text-transform: uppercase;
 	color: var(--text-dim);
 }
-.sessions-drawer .session-list {
+
+.sessions-panel .session-list {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
@@ -467,38 +450,116 @@ body::before {
 	gap: 2px;
 	padding-right: 2px;
 }
-.sessions-drawer .session-item {
+.sessions-panel .session-item {
 	text-align: left;
 	background: transparent;
 	border: 1px solid transparent;
-	border-radius: 8px;
+	border-radius: 10px;
 	padding: 8px 10px;
 	cursor: pointer;
 	color: var(--text);
+	transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.sessions-drawer .session-item:hover {
+.sessions-panel .session-item:hover {
 	background: var(--bg-elev2);
 }
-.sessions-drawer .session-active {
+
+/* active（当前正在进行）的会话：琥珀高亮 + 状态点 */
+.sessions-panel .session-active {
 	border-color: var(--signal);
 	background: var(--signal-soft);
 }
-.sessions-drawer .session-preview {
+.sessions-panel .session-item-top {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.session-dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex: none;
+	background: var(--text-faint);
+	opacity: 0.5;
+}
+.session-dot-on {
+	background: var(--signal);
+	opacity: 1;
+	box-shadow: 0 0 6px var(--glow);
+	animation: pulse 1.6s ease-in-out infinite;
+}
+
+.sessions-panel .session-preview {
 	font-size: 13px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.sessions-drawer .session-meta {
+.sessions-panel .session-meta {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
 	font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
 	font-size: 10.5px;
 	color: var(--text-faint);
-	margin-top: 2px;
+	margin-top: 3px;
 }
-.sessions-drawer .session-empty {
+.sessions-panel .session-time {
+	white-space: nowrap;
+}
+.sessions-panel .session-empty {
 	font-size: 13px;
 	color: var(--text-faint);
 	padding: 14px 10px;
+}
+
+/* ---------- Rail 二级菜单 ---------- */
+
+.rail-more {
+	position: relative;
+}
+.rail-submenu {
+	position: absolute;
+	left: 52px;
+	top: -8px;
+	min-width: 132px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px;
+	background: var(--glass);
+	backdrop-filter: blur(20px);
+	-webkit-backdrop-filter: blur(20px);
+	border: 1px solid var(--border-strong);
+	border-radius: 12px;
+	box-shadow: var(--shadow-card);
+	z-index: 160;
+	animation: fade-slide 0.18s ease backwards;
+}
+.rail-submenu-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 10px;
+	border: none;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--text-dim);
+	font-size: 13px;
+	font-family: inherit;
+	cursor: pointer;
+	text-align: left;
+	white-space: nowrap;
+}
+.rail-submenu-item:hover {
+	background: var(--bg-elev2);
+	color: var(--text);
+}
+.rail-submenu-active {
+	color: var(--signal);
+	background: var(--signal-soft);
 }
 
 /* ---------- Toasts ---------- */
@@ -572,6 +633,13 @@ body::before {
 	border-color: transparent;
 	color: var(--on-signal);
 	font-weight: 600;
+}
+.btn-icon-only {
+	padding: 6px;
+	border-radius: 8px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 }
 .btn-primary:hover {
 	background: var(--signal);

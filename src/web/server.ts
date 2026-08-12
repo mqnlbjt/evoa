@@ -20,6 +20,8 @@ export interface SessionSummary {
 	createdAt: number;
 	updatedAt: number;
 	preview: string;
+	/** 是否为当前正在进行的会话（用于前端区分 active/历史）。 */
+	active: boolean;
 }
 
 export type ServerToClientMessage =
@@ -193,7 +195,11 @@ export class WebServer {
 		this.controller = new TurnController({
 			chat: session.chat,
 			state: session.state,
-			onRenderRequested: () => this.broadcastSnapshot(),
+			onRenderRequested: () => {
+				this.broadcastSnapshot();
+				// 每次渲染后刷新 sessions（消息落盘后 active 标记会变化）
+				this.broadcastSessions();
+			},
 			onStopRequested: () => void this.stop(),
 			onViewChanged: () => this.broadcastSnapshot(),
 		});
@@ -311,6 +317,7 @@ export class WebServer {
 				createdAt: stored.createdAt,
 				updatedAt: stored.updatedAt,
 				preview: sessionPreview(stored),
+				active: this.session?.chat.sessionId === stored.id,
 			} satisfies SessionSummary;
 		}));
 		return summaries

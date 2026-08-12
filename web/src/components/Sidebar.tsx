@@ -1,5 +1,16 @@
-import { useEffect, useRef } from "react";
-import { Activity, Dna, Hexagon, MessageSquare, Moon, Plus, ScanSearch, Sun, Wifi, WifiOff } from "lucide-react";
+import { useRef, useState } from "react";
+import {
+	Activity,
+	Dna,
+	Hexagon,
+	MessageSquare,
+	Moon,
+	Plus,
+	ScanSearch,
+	Sun,
+	Wifi,
+	WifiOff,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ChatView, SessionSummary } from "../types";
 
@@ -14,18 +25,23 @@ interface SidebarProps {
 	// 可选：主题切换（由 App 传入）
 	theme?: "dark" | "light";
 	onToggleTheme?: () => void;
-	// 抽屉开关状态由 App 持有
-	drawerOpen: boolean;
-	onToggleDrawer: () => void;
-	onCloseDrawer: () => void;
 }
 
-const NAV_ITEMS: Array<{ view: ChatView; label: string; icon: LucideIcon }> = [
-	{ view: "chat", label: "Chat", icon: MessageSquare },
+/** 二级菜单（Stats/Trace/Evolve） */
+const MORE_ITEMS: Array<{ view: ChatView; label: string; icon: LucideIcon }> = [
 	{ view: "stats", label: "Stats", icon: Activity },
 	{ view: "trace", label: "Trace", icon: ScanSearch },
 	{ view: "evolve", label: "Evolve", icon: Dna },
 ];
+
+/** 时间 → 友好显示。 */
+function timeAgo(ts: number): string {
+	const diff = Date.now() - ts;
+	if (diff < 60_000) return "just now";
+	if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+	if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+	return new Date(ts).toLocaleDateString();
+}
 
 export function Sidebar({
 	view,
@@ -37,55 +53,62 @@ export function Sidebar({
 	onResume,
 	theme = "dark",
 	onToggleTheme,
-	drawerOpen,
-	onToggleDrawer,
-	onCloseDrawer,
 }: SidebarProps): React.ReactElement {
-	const drawerRef = useRef<HTMLDivElement>(null);
-
-	// 抽屉外点击关闭（mousedown 判断目标是否在抽屉内部）
-	useEffect(() => {
-		if (!drawerOpen) return;
-		const onPointerDown = (event: MouseEvent): void => {
-			if (drawerRef.current && !drawerRef.current.contains(event.target as Node)) {
-				onCloseDrawer();
-			}
-		};
-		document.addEventListener("mousedown", onPointerDown);
-		return () => document.removeEventListener("mousedown", onPointerDown);
-	}, [drawerOpen, onCloseDrawer]);
+	const [moreOpen, setMoreOpen] = useState(false);
+	const moreRef = useRef<HTMLDivElement>(null);
 
 	return (
 		<>
 			<aside className="rail">
-				<button
-					type="button"
-					className="rail-logo"
-					onClick={onToggleDrawer}
-					title="Sessions"
-					aria-label="Sessions"
-					aria-expanded={drawerOpen}
-				>
+				<div className="rail-logo" title="evoa">
 					<Hexagon size={26} strokeWidth={1.75} />
-				</button>
+				</div>
 
 				<nav className="rail-nav">
-					{NAV_ITEMS.map((item) => {
-						const Icon = item.icon;
-						const active = view === item.view;
-						return (
-							<button
-								key={item.view}
-								type="button"
-								className={`rail-item${active ? " rail-item-active" : ""}`}
-								onClick={() => onView(item.view)}
-								title={item.label}
-								aria-label={item.label}
-							>
-								<Icon size={20} strokeWidth={1.75} />
-							</button>
-						);
-					})}
+					<button
+						type="button"
+						className={`rail-item${view === "chat" ? " rail-item-active" : ""}`}
+						onClick={() => onView("chat")}
+						title="Chat"
+						aria-label="Chat"
+					>
+						<MessageSquare size={20} strokeWidth={1.75} />
+					</button>
+
+					{/* 二级菜单入口 */}
+					<div className="rail-more" ref={moreRef}>
+						<button
+							type="button"
+							className={`rail-item${MORE_ITEMS.some((item) => item.view === view) ? " rail-item-active" : ""}`}
+							onClick={() => setMoreOpen((open) => !open)}
+							title="More views"
+							aria-label="More views"
+							aria-expanded={moreOpen}
+						>
+							<ScanSearch size={20} strokeWidth={1.75} />
+						</button>
+						{moreOpen && (
+							<div className="rail-submenu">
+								{MORE_ITEMS.map((item) => {
+									const Icon = item.icon;
+									return (
+										<button
+											key={item.view}
+											type="button"
+											className={`rail-submenu-item${view === item.view ? " rail-submenu-active" : ""}`}
+											onClick={() => {
+												onView(item.view);
+												setMoreOpen(false);
+											}}
+										>
+											<Icon size={15} strokeWidth={1.75} />
+											{item.label}
+										</button>
+									);
+								})}
+							</div>
+						)}
+					</div>
 				</nav>
 
 				<div className="rail-bottom">
@@ -109,38 +132,39 @@ export function Sidebar({
 				</div>
 			</aside>
 
-			<div
-				ref={drawerRef}
-				className={`sessions-drawer${drawerOpen ? " drawer-open" : ""}`}
-				aria-hidden={!drawerOpen}
-			>
-				<div className="sessions-drawer-head">
-					<span className="sessions-drawer-title">Sessions</span>
-					<button type="button" className="btn btn-primary" onClick={onNewSession}>
-						<Plus size={14} strokeWidth={2.25} /> New
+			{/* 常驻 Sessions 面板：所有会话排开，active 高亮 */}
+			<aside className="sessions-panel">
+				<div className="sessions-panel-head">
+					<span className="sessions-panel-title">Sessions</span>
+					<button type="button" className="btn btn-primary btn-icon-only" onClick={onNewSession} title="New session" aria-label="New session">
+						<Plus size={15} strokeWidth={2.25} />
 					</button>
 				</div>
 				<div className="session-list">
 					{sessions.length === 0 && <div className="session-empty">No sessions yet — start a new one.</div>}
-					{sessions.map((session) => (
-						<button
-							key={session.id}
-							type="button"
-							className={`session-item${session.id === currentSessionId ? " session-active" : ""}`}
-							onClick={() => {
-								onResume(session.id);
-								onCloseDrawer();
-							}}
-							title={session.id}
-						>
-							<div className="session-preview">{session.preview || "(empty)"}</div>
-							<div className="session-meta">
-								{session.agentId} · {new Date(session.updatedAt).toLocaleString()}
-							</div>
-						</button>
-					))}
+					{sessions.map((session) => {
+						const isActive = session.active && session.id === currentSessionId;
+						return (
+							<button
+								key={session.id}
+								type="button"
+								className={`session-item${isActive ? " session-active" : ""}`}
+								onClick={() => onResume(session.id)}
+								title={session.id}
+							>
+								<div className="session-item-top">
+									<span className={`session-dot${isActive ? " session-dot-on" : ""}`} />
+									<span className="session-preview">{session.preview || "(empty)"}</span>
+								</div>
+								<div className="session-meta">
+									<span>{session.agentId}</span>
+									<span className="session-time">{timeAgo(session.updatedAt)}</span>
+								</div>
+							</button>
+						);
+					})}
 				</div>
-			</div>
+			</aside>
 		</>
 	);
 }

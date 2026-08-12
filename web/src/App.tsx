@@ -18,7 +18,6 @@ export function App(): React.ReactElement {
 		// 默认 dark，localStorage 持久化
 		return localStorage.getItem("evoa-theme") === "light" ? "light" : "dark";
 	});
-	const [drawerOpen, setDrawerOpen] = useState(false);
 
 	// 主题：写 html[data-theme] 供 CSS 变量选择，并持久化
 	useEffect(() => {
@@ -72,9 +71,6 @@ export function App(): React.ReactElement {
 				onResume={(sessionId) => session.resume(sessionId)}
 				theme={theme}
 				onToggleTheme={toggleTheme}
-				drawerOpen={drawerOpen}
-				onToggleDrawer={() => setDrawerOpen((open) => !open)}
-				onCloseDrawer={() => setDrawerOpen(false)}
 			/>
 			<main className="main-stage">
 				<StatusCorner snapshot={snapshot} />
