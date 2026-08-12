@@ -1046,6 +1046,55 @@ body::before {
 	color: var(--text-dim);
 }
 
+/* 上下文行：与进度条同一行 */
+.status-ctx-row {
+	border-top: 1px solid var(--border);
+	padding-top: 8px;
+	margin-top: 2px;
+}
+
+/* token 明细网格：2 行 × 3 列 */
+.status-token-grid {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(64px, auto));
+	gap: 6px 12px;
+	border-top: 1px solid var(--border);
+	padding-top: 8px;
+	margin-top: 2px;
+	width: 100%;
+}
+
+.status-token-cell {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 1px;
+	padding: 4px 8px;
+	border-radius: 8px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	min-width: 64px;
+}
+.status-token-cell.token-accent {
+	background: var(--signal-soft);
+	border-color: var(--signal);
+}
+.token-cell-label {
+	font-size: 9.5px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+}
+.token-cell-value {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+}
+.status-token-cell.token-accent .token-cell-value {
+	color: var(--signal);
+}
+
 .status-pill {
 	display: inline-flex;
 	align-items: center;
