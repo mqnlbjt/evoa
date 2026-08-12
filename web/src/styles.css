@@ -803,6 +803,7 @@ body::before {
 	display: flex;
 	flex-direction: column;
 	max-width: 70%;
+	flex-shrink: 0;
 	animation: rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
@@ -818,6 +819,7 @@ body::before {
 	display: flex;
 	flex-direction: column;
 	max-width: 70%;
+	flex-shrink: 0;
 	animation: rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
@@ -907,6 +909,7 @@ body::before {
 .msg-tool {
 	align-self: stretch;
 	max-width: 100%;
+	flex-shrink: 0;
 	background: var(--bg-elev);
 	border: 1px solid var(--border);
 	border-left: 2px solid var(--signal);
