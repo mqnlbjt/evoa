@@ -915,6 +915,28 @@ body::before {
 	animation: rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
+/* 工具调用分组：连续 tool 条目紧凑粘连（分割线分隔），组间留呼吸空间 */
+.msg-tool + .msg-tool {
+	margin-top: -9px;
+}
+.msg-tool + .msg-tool .tool-head {
+	border-top: 1px solid var(--border);
+}
+.msg-tool.tool-group-start {
+	margin-top: 4px;
+}
+.msg-tool.tool-group-end {
+	margin-bottom: 8px;
+}
+.msg-tool:not(.tool-group-end) {
+	border-bottom-left-radius: 8px;
+	border-bottom-right-radius: 8px;
+}
+.msg-tool:not(.tool-group-start) {
+	border-top-left-radius: 8px;
+	border-top-right-radius: 8px;
+}
+
 .tool-head {
 	display: flex;
 	align-items: center;

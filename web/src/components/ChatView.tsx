@@ -149,9 +149,25 @@ export function ChatView({ snapshot, busy, onSubmit, onInterrupt }: ChatViewProp
 						</div>
 					</div>
 				)}
-				{snapshot.log.map((entry) => (
-					<LogEntry key={entry.id} entry={entry} expanded={expanded.has(entry.id)} onToggle={() => toggle(entry.id)} />
-				))}
+				{snapshot.log.map((entry, index) => {
+					const isTool = entry.kind === "tool_call" || entry.kind === "tool_result";
+					const prev = snapshot.log[index - 1];
+					const next = snapshot.log[index + 1];
+					const prevIsTool = prev ? (prev.kind === "tool_call" || prev.kind === "tool_result") : false;
+					const nextIsTool = next ? (next.kind === "tool_call" || next.kind === "tool_result") : false;
+					const groupClass = isTool
+						? `${!prevIsTool ? " tool-group-start" : ""}${!nextIsTool ? " tool-group-end" : ""}`
+						: "";
+					return (
+						<LogEntry
+							key={entry.id}
+							entry={entry}
+							groupClass={groupClass}
+							expanded={expanded.has(entry.id)}
+							onToggle={() => toggle(entry.id)}
+						/>
+					);
+				})}
 				{snapshot.status === "thinking" && (
 					<div className="status-dot" style={{ color: "var(--signal)" }}>
 						<BrainCircuit className="pulse" size={14} />
@@ -195,7 +211,7 @@ export function ChatView({ snapshot, busy, onSubmit, onInterrupt }: ChatViewProp
 	);
 }
 
-function LogEntry({ entry, expanded, onToggle }: { entry: ChatLogEntry; expanded: boolean; onToggle: () => void }): React.ReactElement {
+function LogEntry({ entry, expanded, onToggle, groupClass = "" }: { entry: ChatLogEntry; expanded: boolean; onToggle: () => void; groupClass?: string }): React.ReactElement {
 	if (entry.kind === "user") {
 		const isCompacted = entry.text.startsWith("[Compacted conversation summary]");
 		if (isCompacted) {
@@ -240,7 +256,7 @@ function LogEntry({ entry, expanded, onToggle }: { entry: ChatLogEntry; expanded
 		const call = entry.raw as { name?: string; input?: unknown } | undefined;
 		const name = call?.name ?? entry.toolName ?? "tool";
 		return (
-			<div className="msg msg-tool">
+			<div className={`msg msg-tool${groupClass}`}>
 				<div
 					className="tool-head"
 					role="button"
@@ -275,7 +291,7 @@ function LogEntry({ entry, expanded, onToggle }: { entry: ChatLogEntry; expanded
 		const result = entry.raw as { output?: unknown; errorMessage?: string; status?: string; durationMs?: number } | undefined;
 		const { icon: StatusIcon, color } = toolStatusInfo(result?.status, entry.severity);
 		return (
-			<div className="msg msg-tool">
+			<div className={`msg msg-tool${groupClass}`}>
 				<div
 					className="tool-head"
 					role="button"
