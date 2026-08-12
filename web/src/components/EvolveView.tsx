@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import type { ReactElement } from "react";
+import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { api } from "../api";
 import type { EvolutionHistoryRecord } from "../types";
 import { JsonBlock } from "./Markdown";
 
-export function EvolveView({ historyPath }: { historyPath: string | undefined }): React.ReactElement {
+export function EvolveView({ historyPath }: { historyPath: string | undefined }): ReactElement {
 	const [records, setRecords] = useState<EvolutionHistoryRecord[]>([]);
 	const [path, setPath] = useState(historyPath ?? "");
 	const [loading, setLoading] = useState(false);
@@ -33,67 +35,102 @@ export function EvolveView({ historyPath }: { historyPath: string | undefined })
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
+	const toggle = (key: string): void => {
+		setExpanded(expanded === key ? undefined : key);
+	};
+
 	return (
 		<div className="evolve-view">
-			<div className="evolve-header">
+			<div className="evolve-toolbar">
 				<input
 					className="trace-filter"
 					placeholder="Evolution history JSONL path…"
 					value={path}
 					onChange={(event) => setPath(event.target.value)}
-					onKeyDown={(event) => { if (event.key === "Enter") void load(path); }}
+					onKeyDown={(event) => {
+						if (event.key === "Enter") void load(path);
+					}}
 				/>
 				<button className="btn btn-primary" onClick={() => void load(path)} disabled={loading}>
+					{loading && <Loader2 size={14} className="spin" />}
 					{loading ? "Loading…" : "Load"}
 				</button>
 			</div>
+
 			{error && <div className="error-text">{error}</div>}
-			{records.length === 0 && !error && <div className="evolve-empty">No evolution history loaded. Point to a JSONL file produced by <code>evoa evolve --history &lt;file&gt;</code>.</div>}
+
+			{records.length === 0 && !error && (
+				<div className="evolve-empty">
+					No evolution history loaded. Point to a JSONL file produced by <code>evoa evolve --history &lt;file&gt;</code>.
+				</div>
+			)}
+
 			<div className="evolve-list">
-				{records.map((record) => (
-					<div key={record.timestamp + record.suiteId + record.baselineAgent.id} className="evolve-card">
-						<div className="evolve-card-head">
-							<span className={`evolve-badge ${record.deltaScore >= 0 ? "badge-good" : "badge-bad"}`}>
-								Δ{(record.deltaScore >= 0 ? "+" : "")}{record.deltaScore.toFixed(2)}
-							</span>
-							<span className={`evolve-badge ${record.deltaPassRate >= 0 ? "badge-good" : "badge-bad"}`}>
-								pass {(record.deltaPassRate >= 0 ? "+" : "")}{(record.deltaPassRate * 100).toFixed(0)}%
-							</span>
-							<span className="evolve-suite">{record.suiteId}</span>
-							<span className="evolve-time">{new Date(record.timestamp).toLocaleString()}</span>
-						</div>
-						<div className="evolve-card-body">
-							<div className="evolve-agents">
-								<span>baseline: <code>{record.baselineAgent.id}</code></span>
-								<span>candidate: <code>{record.candidateAgent.id}</code>{record.candidate ? ` (${record.candidate.kind})` : ""}</span>
+				{records.map((record) => {
+					const key = `${record.timestamp}|${record.suiteId}|${record.baselineAgent.id}`;
+					const isOpen = expanded === key;
+					const scoreBad = record.deltaScore < 0;
+					const passBad = record.deltaPassRate < 0;
+					return (
+						<div key={key} className="evolve-card">
+							<div className="evolve-head">
+								<span className={`evolve-badge ${scoreBad ? "evolve-badge-bad" : "evolve-badge-good"}`}>
+									Δ{(record.deltaScore >= 0 ? "+" : "")}
+									{record.deltaScore.toFixed(2)}
+								</span>
+								<span className={`evolve-badge ${passBad ? "evolve-badge-bad" : "evolve-badge-good"}`}>
+									pass {(record.deltaPassRate >= 0 ? "+" : "")}
+									{(record.deltaPassRate * 100).toFixed(0)}%
+								</span>
+								<span className="evolve-suite">{record.suiteId}</span>
+								<span className="evolve-time">{new Date(record.timestamp).toLocaleString()}</span>
 							</div>
-							{record.candidate?.description && <p className="evolve-desc">{record.candidate.description}</p>}
-							<div className="evolve-reco">recommendation: <strong>{record.recommendation}</strong></div>
-							{(record.improvements.length > 0 || record.regressions.length > 0) && (
-								<button className="btn btn-small" onClick={() => setExpanded(expanded === record.timestamp ? undefined : record.timestamp)}>
-									{expanded === record.timestamp ? "Hide details" : "Show details"}
-								</button>
-							)}
-							{expanded === record.timestamp && (
-								<div className="evolve-details">
-									{record.improvements.length > 0 && (
-										<div className="evolve-improvements">
-											<strong>improvements</strong>
-											<ul>{record.improvements.map((item) => <li key={item}>{item}</li>)}</ul>
-										</div>
-									)}
-									{record.regressions.length > 0 && (
-										<div className="evolve-regressions">
-											<strong>regressions</strong>
-											<ul>{record.regressions.map((item) => <li key={item}>{item}</li>)}</ul>
-										</div>
-									)}
-									{record.candidate?.patch && <JsonBlock value={record.candidate.patch} maxChars={6000} />}
+
+							<div className="evolve-body">
+								<div className="evolve-agents">
+									<span className="evolve-agent-baseline">
+										baseline <code>{record.baselineAgent.id}</code>
+									</span>
+									<span className="evolve-agent-candidate">
+										candidate <code>{record.candidateAgent.id}</code>
+										{record.candidate ? ` (${record.candidate.kind})` : ""}
+									</span>
 								</div>
-							)}
+
+								{record.candidate?.description && <p className="evolve-desc">{record.candidate.description}</p>}
+
+								<div className="evolve-reco">
+									recommendation: <strong>{record.recommendation}</strong>
+								</div>
+
+								{(record.improvements.length > 0 || record.regressions.length > 0) && (
+									<button className="btn btn-ghost" onClick={() => toggle(key)}>
+										{isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+										{isOpen ? "Hide details" : "Show details"}
+									</button>
+								)}
+
+								{isOpen && (
+									<div className="evolve-details">
+										{record.improvements.length > 0 && (
+											<div className="evolve-improvements">
+												<strong>improvements</strong>
+												<ul>{record.improvements.map((item) => <li key={item}>{item}</li>)}</ul>
+											</div>
+										)}
+										{record.regressions.length > 0 && (
+											<div className="evolve-regressions">
+												<strong>regressions</strong>
+												<ul>{record.regressions.map((item) => <li key={item}>{item}</li>)}</ul>
+											</div>
+										)}
+										{record.candidate?.patch && <JsonBlock value={record.candidate.patch} maxChars={6000} />}
+									</div>
+								)}
+							</div>
 						</div>
-					</div>
-				))}
+					);
+				})}
 			</div>
 		</div>
 	);
