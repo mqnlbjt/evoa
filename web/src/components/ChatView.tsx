@@ -26,19 +26,10 @@ interface ChatViewProps {
 
 const SLASH_HINTS = ["/help", "/clear", "/new", "/status", "/stats", "/tools", "/memory", "/trace", "/evolve"];
 
-/** 等宽小字（状态行 / 时间戳 / 工具名共用）。 */
+/** 等宽小字（时间戳 / 工具名共用）。 */
 const MONO: CSSProperties = {
 	fontFamily: 'ui-monospace, "JetBrains Mono", "Cascadia Code", monospace',
 	fontSize: 11,
-};
-
-/** 五态状态 pill 的强调色（CSS 变量来自 DESIGN.md 色板）。 */
-const PILL_STYLE: Record<ChatStatus, CSSProperties> = {
-	idle: { color: "var(--text-faint)" },
-	thinking: { color: "var(--signal)", background: "var(--signal-soft)" },
-	running_tool: { color: "var(--signal)", background: "var(--signal-soft)" },
-	done: { color: "var(--good)", background: "color-mix(in srgb, var(--good) 14%, transparent)" },
-	error: { color: "var(--bad)", background: "color-mix(in srgb, var(--bad) 14%, transparent)" },
 };
 
 const SEVERITY_COLOR: Record<ChatLogSeverity, string> = {
@@ -131,35 +122,8 @@ export function ChatView({ snapshot, busy, onSubmit, onInterrupt }: ChatViewProp
 		}
 	};
 
-	const usage = snapshot.contextUsage;
-	const usagePct = usage ? Math.round(usage.usageFraction * 100) : 0;
-	const usageColor = usage ? (usagePct >= 90 ? "var(--bad)" : usagePct >= 75 ? "var(--warn)" : "var(--signal)") : "var(--signal)";
-
 	return (
 		<div className="chat-view">
-			{/* 顶部状态行：status pill · provider/model · context % · session id */}
-			<div className="status-line">
-				<span className={`status-pill status-${snapshot.status}`} style={PILL_STYLE[snapshot.status]}>
-					{snapshot.status}
-				</span>
-				<span style={{ ...MONO, color: "var(--text-dim)" }}>
-					{snapshot.provider}/{snapshot.model}
-				</span>
-				{usage && (
-					<span className="ctx-label" style={{ ...MONO, color: "var(--text-faint)" }} title={`${usage.tokenEstimate.toLocaleString()} / ${usage.budgetMaxTokens.toLocaleString()} tokens`}>
-						context {usagePct}% · {formatTokens(usage.tokenEstimate)}
-					</span>
-				)}
-				{usage && (
-					<span className="ctx-meter" title={`${usagePct}% of budget`}>
-						<span className="ctx-meter-fill" style={{ width: `${usagePct}%`, background: usageColor }} />
-					</span>
-				)}
-				<span className="session-id" style={{ ...MONO, color: "var(--text-faint)", marginLeft: "auto" }} title={snapshot.sessionId}>
-					session {snapshot.sessionId.slice(0, 8)}
-				</span>
-			</div>
-
 			{/* 消息区：自动滚底，上翻 80px 内暂停跟随 */}
 			<div
 				className="chat-scroll"

@@ -169,24 +169,20 @@ body::before {
 	color: var(--bg);
 }
 
-/* 滚动条：细 6px */
+/* 隐藏滚动条：保持滚动能力，不显示任何条 */
 * {
-	scrollbar-width: thin;
-	scrollbar-color: var(--border-strong) transparent;
+	scrollbar-width: none;
 }
 ::-webkit-scrollbar {
-	width: 6px;
-	height: 6px;
+	width: 0;
+	height: 0;
+	display: none;
 }
 ::-webkit-scrollbar-track {
 	background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-	background: var(--border-strong);
-	border-radius: 999px;
-}
-::-webkit-scrollbar-thumb:hover {
-	background: var(--signal);
+	background: transparent;
 }
 
 /* 可访问性：所有交互元素 focus-visible 用 signal outline */
@@ -434,31 +430,33 @@ body::before {
 	z-index: 150;
 	padding: 10px;
 	opacity: 0;
+	visibility: hidden;
 	transform: translateY(-6px);
 	pointer-events: none;
-	transition: opacity 0.2s ease, transform 0.2s ease;
+	transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
 }
 .drawer-open {
 	opacity: 1;
+	visibility: visible;
 	transform: none;
 	pointer-events: auto;
 }
 
-.sessions-drawer .drawer-head {
+.sessions-drawer .sessions-drawer-head {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 	padding: 4px 6px 10px;
 }
-.sessions-drawer .drawer-title {
+.sessions-drawer .sessions-drawer-title {
 	font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
 	font-size: 11px;
 	letter-spacing: 0.16em;
 	text-transform: uppercase;
 	color: var(--text-dim);
 }
-.sessions-drawer .drawer-list {
+.sessions-drawer .session-list {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
@@ -467,7 +465,7 @@ body::before {
 	gap: 2px;
 	padding-right: 2px;
 }
-.sessions-drawer .drawer-item {
+.sessions-drawer .session-item {
 	text-align: left;
 	background: transparent;
 	border: 1px solid transparent;
@@ -476,26 +474,26 @@ body::before {
 	cursor: pointer;
 	color: var(--text);
 }
-.sessions-drawer .drawer-item:hover {
+.sessions-drawer .session-item:hover {
 	background: var(--bg-elev2);
 }
-.sessions-drawer .drawer-item-active {
+.sessions-drawer .session-active {
 	border-color: var(--signal);
 	background: var(--signal-soft);
 }
-.sessions-drawer .drawer-preview {
+.sessions-drawer .session-preview {
 	font-size: 13px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.sessions-drawer .drawer-meta {
+.sessions-drawer .session-meta {
 	font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
 	font-size: 10.5px;
 	color: var(--text-faint);
 	margin-top: 2px;
 }
-.sessions-drawer .drawer-empty {
+.sessions-drawer .session-empty {
 	font-size: 13px;
 	color: var(--text-faint);
 	padding: 14px 10px;
@@ -505,7 +503,7 @@ body::before {
 
 .toasts {
 	position: fixed;
-	top: 16px;
+	top: 66px;
 	right: 16px;
 	z-index: 200;
 	display: flex;
@@ -726,13 +724,16 @@ body::before {
 
 .msg-system {
 	align-self: center;
-	max-width: 100%;
+	max-width: min(640px, 90%);
 	background: var(--bg-elev);
 	border: 1px solid var(--border);
 	color: var(--text-dim);
 	font-size: 12.5px;
-	border-radius: 999px;
-	padding: 4px 14px;
+	line-height: 1.6;
+	border-radius: 12px;
+	padding: 8px 14px;
+	white-space: pre-wrap;
+	word-break: break-word;
 }
 
 /* 等宽小字时间戳 */
@@ -894,24 +895,54 @@ body::before {
 	animation: spin 1s linear infinite;
 }
 
-/* ---------- 顶部状态行 ---------- */
+/* ---------- 右上角状态浮层 ---------- */
 
-.status-line {
-	position: sticky;
-	top: 0;
-	z-index: 20;
+.status-corner {
+	position: fixed;
+	top: 14px;
+	right: 18px;
+	z-index: 30;
 	display: flex;
-	align-items: center;
-	gap: 16px;
-	padding: 12px 32px 6px;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 6px;
+	padding: 10px 14px;
+	border-radius: 14px;
 	font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
 	font-size: 11px;
 	letter-spacing: 0.04em;
 	color: var(--text-faint);
 	background: var(--glass);
-	backdrop-filter: blur(12px);
-	-webkit-backdrop-filter: blur(12px);
-	border-bottom: 1px solid var(--border);
+	backdrop-filter: blur(14px);
+	-webkit-backdrop-filter: blur(14px);
+	border: 1px solid var(--border);
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+	transition: border-color 0.25s ease;
+}
+.status-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+.status-corner:hover {
+	border-color: var(--border-strong);
+}
+
+.status-cwd {
+	max-width: 220px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	direction: rtl;
+	text-align: left;
+}
+.status-think {
+	color: var(--volt);
+}
+.status-tokens {
+	color: var(--text-dim);
 }
 
 .status-pill {

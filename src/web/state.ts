@@ -47,6 +47,7 @@ export class ChatState {
 			agentId: this.options.agentId,
 			model: this.currentModel,
 			provider: this.currentProvider,
+			...(this.options.reasoningLevel ? { reasoningLevel: this.options.reasoningLevel } : {}),
 			toolProfile: this.options.toolProfile,
 			mcpServerCount: this.options.mcpServerCount ?? 0,
 			cwd: this.options.cwd,
@@ -117,14 +118,15 @@ export class ChatState {
 		this.log.length = 0;
 	}
 
-	/** 用已存储会话的消息重建聊天记录（用户/助手/系统文本，不含工具细节）。 */
+	/** 用已存储会话的消息重建聊天记录（仅用户/助手文本，不含 system prompt 与工具细节）。 */
 	restoreMessages(messages: ModelMessage[]): void {
 		this.clearLog();
 		for (const message of messages) {
 			if (!message.content.trim()) continue;
+			// system 角色 = 系统提示词/工具声明，属内部配置，不展示给用户
+			if (message.role === "system") continue;
 			if (message.role === "user") this.addLog({ kind: "user", text: message.content, severity: "info" });
 			else if (message.role === "assistant") this.addLog({ kind: "assistant", text: message.content, severity: "info" });
-			else if (message.role === "system") this.addLog({ kind: "system", text: message.content, severity: "info" });
 		}
 	}
 

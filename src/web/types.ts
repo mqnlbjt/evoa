@@ -32,6 +32,7 @@ export interface ChatStateOptions {
 	agentId: string;
 	model: string;
 	provider: string;
+	reasoningLevel?: string;
 	toolProfile: string;
 	mcpServerCount?: number;
 	cwd: string;

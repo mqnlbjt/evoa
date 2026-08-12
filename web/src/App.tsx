@@ -7,6 +7,7 @@ import { StatsView } from "./components/StatsView";
 import { TraceView } from "./components/TraceView";
 import { EvolveView } from "./components/EvolveView";
 import { Sidebar } from "./components/Sidebar";
+import { StatusCorner } from "./components/StatusCorner";
 
 type Theme = "dark" | "light";
 
@@ -76,10 +77,11 @@ export function App(): React.ReactElement {
 				onCloseDrawer={() => setDrawerOpen(false)}
 			/>
 			<main className="main-stage">
+				<StatusCorner snapshot={snapshot} />
 				{session.systemMessages.length > 0 && (
 					<div className="toasts" role="status" aria-live="polite">
-						{session.systemMessages.map((message, index) => (
-							<div key={`${index}-${message.slice(0, 24)}`} className="toast">{message}</div>
+						{session.systemMessages.map((toast) => (
+							<div key={toast.id} className="toast">{toast.text}</div>
 						))}
 					</div>
 				)}

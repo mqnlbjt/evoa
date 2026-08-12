@@ -194,6 +194,7 @@ export interface ChatStateSnapshot {
 	agentId: string;
 	model: string;
 	provider: string;
+	reasoningLevel?: string;
 	toolProfile: string;
 	mcpServerCount: number;
 	cwd: string;

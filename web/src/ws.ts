@@ -4,7 +4,7 @@ import type { ChatStateSnapshot, ClientToServerMessage, ServerToClientMessage, S
 export interface WebSession {
 	snapshot: ChatStateSnapshot | undefined;
 	sessions: SessionSummary[];
-	systemMessages: string[];
+	systemMessages: Array<{ id: string; text: string }>;
 	connected: boolean;
 	send: (message: ClientToServerMessage) => void;
 	submit: (input: string) => void;
@@ -25,7 +25,7 @@ function wsUrl(): string {
 export function useWebSession(): WebSession {
 	const [snapshot, setSnapshot] = useState<ChatStateSnapshot | undefined>(undefined);
 	const [sessions, setSessions] = useState<SessionSummary[]>([]);
-	const [systemMessages, setSystemMessages] = useState<string[]>([]);
+	const [systemMessages, setSystemMessages] = useState<Array<{ id: string; text: string }>>([]);
 	const [connected, setConnected] = useState(false);
 	const socketRef = useRef<WebSocket | undefined>(undefined);
 	const retryRef = useRef(0);
@@ -47,7 +47,12 @@ export function useWebSession(): WebSession {
 				if (message.type === "snapshot") setSnapshot(message.snapshot);
 				else if (message.type === "sessions") setSessions(message.sessions);
 				else if (message.type === "system") {
-					setSystemMessages((previous) => [...previous.slice(-(MAX_SYSTEM_MESSAGES - 1)), message.message]);
+					const toastId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+					setSystemMessages((previous) => [...previous, { id: toastId, text: message.message }].slice(-MAX_SYSTEM_MESSAGES));
+					// toast 5 秒后自动消失
+					setTimeout(() => {
+						setSystemMessages((previous) => previous.filter((item) => item.id !== toastId));
+					}, 5000);
 				}
 			};
 			socket.onclose = () => {

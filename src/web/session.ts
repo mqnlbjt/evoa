@@ -38,6 +38,7 @@ function chatStateOptions(chat: ChatServiceContext, options: ChatSessionOptions)
 		agentId: chat.agent.id,
 		model: chat.agent.model.model,
 		provider: chat.agent.model.provider,
+		...(chat.agent.model.reasoningLevel ? { reasoningLevel: chat.agent.model.reasoningLevel } : {}),
 		toolProfile: chat.command.toolProfile,
 		mcpServerCount: Object.keys(chat.command.mcpServers ?? {}).length,
 		cwd: process.cwd(),
