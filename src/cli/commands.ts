@@ -25,7 +25,7 @@ import { formatPercent, formatTable } from "./format.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { diagnoseMcpServers, type McpDiagnosticsReport, type McpServerDiagnostic } from "../mcp/diagnostics.js";
 import type { McpClientHandle, McpServersConfig } from "../mcp/types.js";
-import type { Terminal } from "../tui/terminal.js";
+import type { WebServer } from "../web/server.js";
 import { createToolRegistryForProfileAsync } from "../tools/profiles.js";
 import { replayTraceSource } from "../replay/trace-replay.js";
 import { createAgentSession, appendUserMessage, entriesFromMessages, type AgentSession, type SessionEntry } from "../runtime/session.js";
@@ -59,7 +59,8 @@ export interface CliDeps {
 	workspaceRoot?: string;
 	now?: () => number;
 	createId?: () => string;
-	createTerminal?: () => Terminal;
+	/** 测试钩子：web 服务器就绪后回调。 */
+	onServerStarted?: (server: WebServer) => void;
 	mcpClientFactory?: (serverName: string, config: McpServersConfig[string]) => Promise<McpClientHandle>;
 	configCwd?: string;
 }

@@ -16,7 +16,7 @@ import type { AgentSessionStore, StoredAgentSession, StoredAgentStartupContext }
 import { JsonSessionStore } from "../sessions/json-session-store.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { createToolRegistryForProfileAsync, createToolRegistryWithBackgroundMcp } from "../tools/profiles.js";
-import type { BenchmarkCommand, ChatCommand, EvolveCommand, RunCommand, TuiCommand } from "./args.js";
+import type { BenchmarkCommand, ChatCommand, EvolveCommand, RunCommand, WebCommand } from "./args.js";
 import { createRoutedModelClient, effectiveAgentForCommand } from "./model-routing.js";
 import { summarizeCompletedSession } from "../runtime/compaction.js";
 
@@ -28,7 +28,6 @@ export interface ChatServiceDeps {
 	workspaceRoot?: string;
 	now?: () => number;
 	createId?: () => string;
-	enableTuiAutomationTools?: boolean;
 }
 
 export type ResolvedChatCommand = ChatCommand & StoredAgentStartupContext;
@@ -59,7 +58,7 @@ export interface ChatTurnOutput {
 	trace: TraceEvent[];
 }
 
-export async function createChatServiceContext(command: ChatCommand | TuiCommand, deps: ChatServiceDeps, options: CreateChatServiceOptions = {}): Promise<ChatServiceContext> {
+export async function createChatServiceContext(command: ChatCommand | WebCommand, deps: ChatServiceDeps, options: CreateChatServiceOptions = {}): Promise<ChatServiceContext> {
 	const chatCommand = asChatCommand(command);
 	const sessionStore = chatSessionStore(chatCommand, deps);
 	const stored = chatCommand.resumeSessionId || chatCommand.sessionId ? await sessionStore.loadSession((chatCommand.resumeSessionId ?? chatCommand.sessionId)!) : undefined;
@@ -139,7 +138,7 @@ async function finalizeChatTurn(context: ChatServiceContext, session: AgentSessi
 	context.stored = stored;
 }
 
-function asChatCommand(command: ChatCommand | TuiCommand): ChatCommand {
+function asChatCommand(command: ChatCommand | WebCommand): ChatCommand {
 	if (command.kind === "chat") return command;
 	return { ...command, kind: "chat" };
 }
@@ -235,12 +234,12 @@ function createRuntime(command: ResolvedChatCommand, deps: ChatServiceDeps, suba
 
 async function createToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): Promise<ToolRegistry> {
 	const workspaceRoot = deps.workspaceRoot ?? process.cwd();
-	return deps.toolRegistry ?? createToolRegistryForProfileAsync({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(deps.enableTuiAutomationTools === false ? {} : { tuiAutomation: { deps } }), ...(command.mcpServers ? { mcpServers: command.mcpServers } : {}) });
+	return deps.toolRegistry ?? createToolRegistryForProfileAsync({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(command.mcpServers ? { mcpServers: command.mcpServers } : {}) });
 }
 
 function createChatToolRegistry(command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps): ToolRegistry {
 	const workspaceRoot = deps.workspaceRoot ?? process.cwd();
-	return deps.toolRegistry ?? createToolRegistryWithBackgroundMcp({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(deps.enableTuiAutomationTools === false ? {} : { tuiAutomation: { deps } }), ...(command.mcpServers ? { mcpServers: command.mcpServers } : {}) });
+	return deps.toolRegistry ?? createToolRegistryWithBackgroundMcp({ profile: command.toolProfile, workspaceRoot, ...(deps.fetchFn ? { fetch: deps.fetchFn } : {}), ...(command.mcpServers ? { mcpServers: command.mcpServers } : {}) });
 }
 
 function toolRegistryForAgent(baseRegistry: ToolRegistry, command: ResolvedChatCommand | RunCommand | BenchmarkCommand | EvolveCommand, deps: ChatServiceDeps, memoryManager?: MemoryManager): ToolRegistry {

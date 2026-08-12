@@ -36,10 +36,10 @@ describe("parseCliArgs", () => {
 		expect(result.command).not.toHaveProperty("prompt");
 	});
 
-	it("parses tui", () => {
-		const result = parseCliArgs(["tui", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--session", "demo"]);
+	it("parses web", () => {
+		const result = parseCliArgs(["web", "--agent", "agent.json", "--provider", "local", "--model", "model", "--base-url", "url", "--session", "demo"]);
 		expect(result.diagnostics).toEqual([]);
-		expect(result.command).toMatchObject({ kind: "tui", agentPath: "agent.json", model: "model", sessionId: "demo", toolProfile: "dangerous" });
+		expect(result.command).toMatchObject({ kind: "web", agentPath: "agent.json", model: "model", sessionId: "demo", toolProfile: "dangerous" });
 		expect(result.command).not.toHaveProperty("prompt");
 	});
 

@@ -1,11 +1,12 @@
 import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path, { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli/main.js";
 import { createIO, fakeOpenAIClient, fakeToolOpenAIClient, lines, nextId } from "./helpers/cli.js";
 
-const agentPath = "/home/wyq/data/pi/evolving-agent/examples/agents/basic.json";
+const repoRoot = resolve(import.meta.dirname, "..");
+const agentPath = `${repoRoot}/examples/agents/basic.json`;
 const providerArgs = ["--provider", "local", "--model", "gpt-5.5", "--base-url", "http://localhost:8317/v1"];
 const modelArgs = ["--agent", agentPath, ...providerArgs];
 

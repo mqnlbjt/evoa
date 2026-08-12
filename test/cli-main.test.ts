@@ -1,16 +1,18 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path, { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { main } from "../src/cli/main.js";
 import type { OpenAIResponsesClient } from "../src/models/openai-client.js";
 import type { McpClientHandle } from "../src/mcp/types.js";
 import { createIO, fakeOpenAIClient, fakeToolOpenAIClient, lines, nextId } from "./helpers/cli.js";
-import { FakeTerminal } from "../src/tui/fake-terminal.js";
+import { WebServer } from "../src/web/server.js";
+import { WebSocket } from "ws";
 
-const agentPath = "/home/wyq/data/pi/evolving-agent/examples/agents/basic.json";
-const taskPath = "/home/wyq/data/pi/evolving-agent/examples/tasks/smoke.json";
-const suitePath = "/home/wyq/data/pi/evolving-agent/examples/suites/smoke.json";
+const repoRoot = resolve(import.meta.dirname, "..");
+const agentPath = `${repoRoot}/examples/agents/basic.json`;
+const taskPath = `${repoRoot}/examples/tasks/smoke.json`;
+const suitePath = `${repoRoot}/examples/suites/smoke.json`;
 
 describe("CLI main", () => {
 	it("discovers models as JSON", async () => {
@@ -82,21 +84,28 @@ describe("CLI main", () => {
 		expect(io.stdoutText()).toBe("hi\n");
 	});
 
-	it("runs tui with a fake terminal", async () => {
+	it("starts the web server and serves chat over WebSocket", async () => {
 		const io = createIO();
-		const terminal = new FakeTerminal();
+		let server: WebServer | undefined;
 		const codePromise = main([
-			"tui", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1",
-		], { ...io, createTerminal: () => terminal, openAIClientFactory: () => fakeOpenAIClient("hi"), now: () => 1, createId: nextId() });
-		await waitFor(() => terminal.outputText().includes("evolving-agent"));
-		terminal.emitInput("/exit");
-		terminal.emitInput("\n");
+			"web", "--agent", agentPath, "--provider", "local", "--model", "gpt-5.4-mini", "--base-url", "http://localhost:8317/v1", "--port", "0",
+		], { ...io, onServerStarted: (started) => { server = started; }, openAIClientFactory: () => fakeOpenAIClient("hi"), now: () => 1, createId: nextId() });
+		await waitForLong(() => server !== undefined);
+		const wsUrl = server!.url().replace(/^http/, "ws");
+		const ws = new WebSocket(wsUrl);
+		const messages: Array<Record<string, unknown>> = [];
+		ws.on("message", (data) => { messages.push(JSON.parse(data.toString())); });
+		await waitForLong(() => messages.some((message) => message.type === "snapshot"));
+		ws.send(JSON.stringify({ type: "submit", input: "hello" }));
+		await waitForLong(() => messages.some((message) => message.type === "snapshot" && JSON.stringify(message.snapshot).includes("\"hi\"")));
+		ws.close();
+		await server!.stop();
 		const code = await codePromise;
 
 		expect(code).toBe(0);
-		expect(io.stdoutText()).toBe("");
-		expect(terminal.outputText()).toContain("evoa | Basic Agent");
-		expect(terminal.isDisposed()).toBe(true);
+		expect(io.stdoutText()).toContain("Web UI started");
+		const initial = messages.find((message) => message.type === "snapshot")?.snapshot as { status: string };
+		expect(initial.status).toBe("idle");
 	});
 
 	it("runs chat as an interactive REPL", async () => {
@@ -513,6 +522,15 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 	for (let attempt = 0; attempt < 20; attempt += 1) {
 		if (predicate()) return;
 		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
+	throw new Error("condition was not met");
+}
+
+async function waitForLong(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
 	throw new Error("condition was not met");
 }

@@ -82,7 +82,8 @@ function mergePrimaryProvider(provider: ProviderConfig, command: ModelRoutedComm
 		...provider,
 		id: command.provider,
 		baseURL: command.baseURL,
-		format: command.providerFormat,
+		// CLI 显式传参 --provider-format 优先，未传时才用 config 里 providers 配置的 format
+		format: explicitProviderFormat(command) ? command.providerFormat : provider.format ?? command.providerFormat,
 		...(command.apiKey ? { apiKey: command.apiKey } : provider.apiKey ? { apiKey: provider.apiKey } : {}),
 	};
 }
@@ -102,8 +103,15 @@ function registerModel(registry: ModelRegistry, command: ModelRoutedCommand, mod
 }
 
 function providerFormat(command: ModelRoutedCommand, providerId: string): ProviderFormat {
-	if (providerId === command.provider) return command.providerFormat;
+	if (providerId === command.provider) {
+		return explicitProviderFormat(command) ? command.providerFormat : command.providers?.[providerId]?.format ?? command.providerFormat;
+	}
 	return command.providers?.[providerId]?.format ?? command.providerFormat;
+}
+
+/** CLI 是否显式传了 --provider-format（区别于默认值 openai-responses）。 */
+function explicitProviderFormat(command: ModelRoutedCommand): boolean {
+	return "providedFlags" in command && command.providedFlags.providerFormat === true;
 }
 
 function commandModel(baseModel: ModelSpec, command: ModelRoutedCommand): ModelSpec {

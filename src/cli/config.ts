@@ -33,6 +33,9 @@ export function parseCliDefaults(value: unknown): CliConfigLoadResult {
 	copyString(value, "baseURL", defaults);
 	copyString(value, "apiKey", defaults);
 	copyString(value, "sessionDir", defaults);
+	copyString(value, "port", defaults);
+	copyString(value, "host", defaults);
+	copyString(value, "staticDir", defaults);
 	copyProviderFormat(value.providerFormat, defaults, diagnostics);
 	copyProviders(value.providers, defaults, diagnostics);
 	copyModelRouting(value.models, defaults, diagnostics);
@@ -41,7 +44,7 @@ export function parseCliDefaults(value: unknown): CliConfigLoadResult {
 	return { defaults, diagnostics };
 }
 
-type StringDefaultKey = "agentPath" | "provider" | "model" | "baseURL" | "apiKey" | "sessionDir";
+type StringDefaultKey = "agentPath" | "provider" | "model" | "baseURL" | "apiKey" | "sessionDir" | "port" | "host" | "staticDir";
 
 function copyString(source: Record<string, unknown>, key: StringDefaultKey, target: CliDefaults): void {
 	const value = source[key];

@@ -2,7 +2,7 @@
 
 > A lightweight, evaluable, verifiable, and self-evolving general-purpose Agent runtime.
 
-`evoa` (from **evo**lving **a**gent) is a TypeScript framework for building and running AI agents with a focus on **measurable improvement**. It provides a full runtime, model client layer, tool system with permission policies, interactive TUI, memory management, benchmark evaluation, and an evolution engine for comparing agent versions.
+`evoa` (from **evo**lving **a**gent) is a TypeScript framework for building and running AI agents with a focus on **measurable improvement**. It provides a full runtime, model client layer, tool system with permission policies, web UI, memory management, benchmark evaluation, and an evolution engine for comparing agent versions.
 
 ## Architecture
 
@@ -36,8 +36,8 @@ npx @wqqqyyz/evoa benchmark --suite <suite.json> --agent <agent.json>
 # Compare two agent versions
 npx @wqqqyyz/evoa evolve --baseline-agent <baseline.json> --candidate-agent <candidate.json> --suite <suite.json>
 
-# Launch TUI
-npx @wqqqyyz/evoa tui
+# Launch Web UI
+npx @wqqqyyz/evoa web --open
 
 # Run tests (from source)
 npm install
@@ -82,16 +82,19 @@ npm test
 | `benchmark` | Run a benchmark suite |
 | `evolve` | Compare baseline vs candidate agent |
 | `models discover` | Auto-discover models from an endpoint |
-| `tui` | Launch the terminal UI |
+| `web` | Launch the web UI (browser) |
 
 Options: `--session`, `--resume`, `--tool-profile`, `--json`, `--report`
 
-### TUI
-- Markdown rendering, bash output display
-- Interactive input editor with slash commands
-- Multi-line input, turn history
-- Viewport scrolling and render scheduling
-- Evolution history viewer
+### Web UI
+- `evoa web` starts a local server (default `http://127.0.0.1:8080`) and serves a React UI
+- Chat with streaming assistant output and live tool-call cards (expandable input/output JSON)
+- Views: Chat / Stats / Trace / Evolve, switchable from the sidebar
+- Session history: list, resume, and start new sessions
+- Slash commands (`/help`, `/stats`, `/trace`, `/memory`, …) work in the input box
+- Dev mode: `npm run dev:web` (Vite on 5173, proxying to the backend); production build served by the backend from `web/dist`
+
+Build the frontend once before first use: `npm run build:web`
 
 ### Benchmark & Evolution
 - Suite/task runner with pass/fail, score, timeout, trace
@@ -156,7 +159,7 @@ src/
 ├── sop/          # SOP workflow runner and validator
 ├── tasks/        # Task loader, validation
 ├── tools/        # Tool registry, policy, profiles, executors
-├── tui/          # TUI state, renderer, interactive mode
+├── web/          # Web server, chat state, React frontend (web/)
 └── index.ts      # Public API exports
 ```
 

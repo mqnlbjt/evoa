@@ -24,6 +24,9 @@ export interface CliDefaults {
 	toolProfile?: ToolProfile;
 	sessionDir?: string;
 	mcpServers?: McpServersConfig;
+	port?: string;
+	host?: string;
+	staticDir?: string;
 }
 
 export interface CliProvidedFlags {
@@ -41,7 +44,7 @@ export type CliCommand =
 	| McpStatusCommand
 	| McpDiagnosticsCommand
 	| ChatCommand
-	| TuiCommand
+	| WebCommand
 	| RunCommand
 	| BenchmarkCommand
 	| EvolveCommand
@@ -104,8 +107,16 @@ export interface ChatCommand
 	providedFlags: CliProvidedFlags;
 }
 
-export interface TuiCommand extends Omit<ChatCommand, "kind" | "prompt"> {
-	kind: "tui";
+export interface WebCommand extends Omit<ChatCommand, "kind" | "prompt"> {
+	kind: "web";
+	/** 监听端口，默认 8080。 */
+	port: number;
+	/** 监听地址，默认 127.0.0.1。 */
+	host: string;
+	/** 前端静态目录，默认 <cwd>/web/dist。 */
+	staticDir?: string;
+	/** 启动后自动打开浏览器。 */
+	open: boolean;
 }
 
 export interface RunCommand
@@ -234,6 +245,9 @@ const valueFlags = new Set([
 	"--session",
 	"--resume",
 	"--session-dir",
+	"--port",
+	"--host",
+	"--static-dir",
 	"--sop-dir",
 	"--output-dir",
 	"--skill-bank",
@@ -241,7 +255,7 @@ const valueFlags = new Set([
 	"--auto",
 	"--generate",
 ]);
-const booleanFlags = new Set(["--json", "--help", "--force", "--list"]);
+const booleanFlags = new Set(["--json", "--help", "--force", "--list", "--open"]);
 
 export function parseCliArgs(
 	args: string[],
@@ -306,9 +320,9 @@ export function parseCliArgs(
 			diagnostics,
 		);
 	}
-	if (commandParts.kind === "tui") {
+	if (commandParts.kind === "web") {
 		return parseCommandResult(
-			buildTui(flags, common, resolvedDefaults, diagnostics),
+			buildWeb(flags, common, resolvedDefaults, diagnostics),
 			diagnostics,
 		);
 	}
@@ -374,7 +388,7 @@ Usage:
   evoa mcp diagnostics [--config <file>] [--json]
   evoa chat "<prompt>" [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--session <id>|--resume <id>] [--api-key <key>] [--tool-profile <profile>] [--config <file>] [--json]
   evoa chat [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--session <id>|--resume <id>] [--api-key <key>] [--tool-profile <profile>] [--config <file>]
-  evoa tui [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--session <id>|--resume <id>] [--api-key <key>] [--tool-profile <profile>] [--config <file>]
+  evoa web [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--session <id>|--resume <id>] [--api-key <key>] [--tool-profile <profile>] [--port <port>] [--host <addr>] [--open] [--static-dir <dir>] [--config <file>]
   evoa run [--agent <file>] --task <file> [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>] [--tool-profile <profile>] [--config <file>] [--json]
   evoa benchmark --suite <file> [--agent <file>] [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>] [--tool-profile <profile>] [--report <file>] [--report-format <json|markdown>] [--config <file>] [--json]
   evoa evolve --suite <file> --baseline-agent <file> --candidate-agent <file> [--provider <id>] [--model <id>] [--base-url <url>] [--api-key <key>] [--tool-profile <profile>] [--report <file>] [--report-format <json|markdown>] [--history <file>] [--config <file>] [--json]
@@ -398,6 +412,10 @@ Options:
   --session <id>
   --resume <id>
   --session-dir <dir>
+  --port <port>
+  --host <addr>
+  --open
+  --static-dir <dir>
   --sop-dir <dir>
   --config <file>
   --format <human|json>
@@ -421,7 +439,7 @@ function parseCommandParts(
 	if (args[0] === "mcp" && args[1] === "diagnostics")
 		return { kind: "mcp.diagnostics", consumed: 2 };
 	if (args[0] === "chat") return { kind: "chat", consumed: 1 };
-	if (args[0] === "tui") return { kind: "tui", consumed: 1 };
+	if (args[0] === "web") return { kind: "web", consumed: 1 };
 	if (args[0] === "run") return { kind: "run", consumed: 1 };
 	if (args[0] === "benchmark") return { kind: "benchmark", consumed: 1 };
 	if (args[0] === "evolve") return { kind: "evolve", consumed: 1 };
@@ -657,16 +675,20 @@ function buildChat(
 	};
 }
 
-function buildTui(
+function buildWeb(
 	flags: FlagValues,
 	common: BaseCommand & { providerFormat: ProviderFormat },
 	defaults: CliDefaults,
 	diagnostics: string[],
-): TuiCommand | undefined {
+): WebCommand | undefined {
 	const chat = buildChat(flags, undefined, common, defaults, diagnostics);
 	if (!chat) return undefined;
 	const { kind: _kind, prompt: _prompt, ...rest } = chat;
-	return { ...rest, kind: "tui" };
+	const port = parsePort(optionValue(flags, "--port", defaults.port), diagnostics);
+	const host = optionValue(flags, "--host", defaults.host) ?? "127.0.0.1";
+	const staticDir = optionValue(flags, "--static-dir", defaults.staticDir);
+	const open = booleanFlag(flags, "--open");
+	return { ...rest, kind: "web", port, host, open, ...(staticDir ? { staticDir } : {}) };
 }
 
 function buildRun(
@@ -1178,6 +1200,14 @@ function optionValue(
 	fallback: string | undefined,
 ): string | undefined {
 	return stringFlag(flags, flag) ?? fallback;
+}
+
+function parsePort(value: string | undefined, diagnostics: string[]): number {
+	if (value === undefined) return 8080;
+	const parsed = Number(value);
+	if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) return parsed;
+	diagnostics.push("--port must be an integer between 0 and 65535");
+	return 8080;
 }
 
 export function configPathFromArgs(args: string[]): string | undefined {

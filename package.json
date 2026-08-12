@@ -9,7 +9,9 @@
 	},
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
-		"prepublishOnly": "npm run build",
+		"build:web": "npm --prefix web run build",
+		"dev:web": "npm --prefix web run dev",
+		"prepublishOnly": "npm run build && npm run build:web",
 		"test": "npx vitest --run",
 		"test:unit": "npx vitest --run --reporter=verbose",
 		"typecheck": "tsc --noEmit"
@@ -19,11 +21,13 @@
 		"better-sqlite3": "^12.9.0",
 		"esbuild": "^0.28.0",
 		"openai": "^6.34.0",
+		"ws": "^8.21.3",
 		"yaml": "^2.8.4"
 	},
 	"devDependencies": {
 		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^24.3.0",
+		"@types/ws": "^8.18.1",
 		"typescript": "^5.7.3",
 		"vitest": "^3.2.4"
 	},
@@ -34,7 +38,8 @@
 	"files": [
 		"dist/**/*.js",
 		"dist/**/*.d.ts",
-		"dist/**/*.js.map"
+		"dist/**/*.js.map",
+		"web/dist/**"
 	],
 	"keywords": [
 		"agent",
