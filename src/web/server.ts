@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
@@ -59,6 +60,11 @@ export class WebServer {
 	}
 
 	async start(): Promise<void> {
+		// web 模式：未显式指定 session 时，分配一个持久 sessionId，
+		// 否则 finalizeChatTurn 的落盘条件不成立，对话全部只存内存，重启即丢。
+		if (!this.options.command.sessionId && !this.options.command.resumeSessionId) {
+			this.options.command.sessionId = randomUUID();
+		}
 		const session = await createChatSession({
 			command: this.options.command,
 			deps: this.options.deps,
