@@ -71,7 +71,11 @@ export class WebServer {
 			command: this.options.command,
 			deps: this.options.deps,
 			...(this.options.now ? { now: this.options.now } : {}),
-			onTraceEvent: () => this.broadcastSnapshot(),
+			onTraceEvent: () => {
+				// 每个 trace 事件到达时同步统计（此时 stats 已累计），供落盘持久化
+				this.syncStats();
+				this.broadcastSnapshot();
+			},
 		});
 		this.attachController(session);
 		this.session = session;
@@ -166,7 +170,11 @@ export class WebServer {
 			command: this.options.command,
 			deps: this.options.deps,
 			...(this.options.now ? { now: this.options.now } : {}),
-			onTraceEvent: () => this.broadcastSnapshot(),
+			onTraceEvent: () => {
+				// 每个 trace 事件到达时同步统计（此时 stats 已累计），供落盘持久化
+				this.syncStats();
+				this.broadcastSnapshot();
+			},
 		});
 		this.attachController(this.session);
 		this.broadcastSnapshot();
@@ -182,7 +190,11 @@ export class WebServer {
 			command,
 			deps: this.options.deps,
 			...(this.options.now ? { now: this.options.now } : {}),
-			onTraceEvent: () => this.broadcastSnapshot(),
+			onTraceEvent: () => {
+				// 每个 trace 事件到达时同步统计（此时 stats 已累计），供落盘持久化
+				this.syncStats();
+				this.broadcastSnapshot();
+			},
 		});
 		session.state.restoreMessages(session.chat.messages);
 		this.session = session;
@@ -191,11 +203,18 @@ export class WebServer {
 		this.send(ws, { type: "system", message: `Resumed session: ${sessionId}` });
 	}
 
+	private syncStats(): void {
+		if (!this.session) return;
+		this.session.chat.statsData = this.session.state.serializeStats();
+	}
+
 	private attachController(session: ChatSession): void {
 		this.controller = new TurnController({
 			chat: session.chat,
 			state: session.state,
 			onRenderRequested: () => {
+				// 同步统计到 context，供 finalizeChatTurn 落盘持久化
+				this.syncStats();
 				this.broadcastSnapshot();
 				// 每次渲染后刷新 sessions（消息落盘后 active 标记会变化）
 				this.broadcastSessions();
@@ -378,13 +397,38 @@ function parseClientMessage(data: unknown): ClientToServerMessage | undefined {
 
 function sessionPreview(stored: StoredAgentSession): string {
 	const messages = stored.messages ?? [];
+	// 优先找最后一条真实用户消息（跳过 system / 压缩摘要 / 工具消息）
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const message = messages[i];
+		if (!message || message.role !== "user") continue;
+		const text = stripCompactionPrefix(message.content).trim();
+		if (text) return truncate(text);
+	}
+	// 兜底：最后一条非 system 内容
 	for (let i = messages.length - 1; i >= 0; i -= 1) {
 		const message = messages[i];
 		if (!message || message.role === "system") continue;
-		const text = message.content.trim();
-		if (text) return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+		const text = stripCompactionPrefix(message.content).trim();
+		if (text) return truncate(text);
 	}
 	return "(empty)";
+}
+
+/** 去掉压缩摘要前缀（[Compacted conversation summary] / Question: / Answer: 等）。 */
+function stripCompactionPrefix(content: string): string {
+	let text = content;
+	if (text.startsWith("[Compacted conversation summary]")) {
+		text = text.slice("[Compacted conversation summary]".length);
+	}
+	// 压缩摘要里的问答对只取第一行 Question 作为标题
+	const question = text.match(/Question:\s*(.+)/);
+	if (question && question[1]) return question[1];
+	const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	return lines[0] ?? text;
+}
+
+function truncate(text: string): string {
+	return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
 
 function safeSessionId(id: string): string {

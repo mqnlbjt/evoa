@@ -47,6 +47,8 @@ export interface ChatServiceContext {
 	memoryManager?: MemoryManager;
 	memoryProjectId: string;
 	eventObserver?: TraceEventObserver;
+	/** 会话统计（token 用量等）的持久化数据，由 web 层 ChatState 提供。 */
+	statsData?: Record<string, unknown>;
 }
 
 export interface CreateChatServiceOptions {
@@ -88,6 +90,7 @@ export async function createChatServiceContext(command: ChatCommand | WebCommand
 		memoryProjectId,
 		...(memoryManager ? { memoryManager } : {}),
 		...(options.eventObserver ? { eventObserver: options.eventObserver } : {}),
+		...(stored?.statsData ? { statsData: stored.statsData } : {}),
 	};
 }
 
@@ -133,7 +136,7 @@ async function finalizeChatTurn(context: ChatServiceContext, session: AgentSessi
 	context.entries = session.entries ?? entriesFromMessages(session.messages);
 	if (recordMemory) context.memoryManager?.recordTurn({ agentId: context.agent.id, sessionId: context.sessionId, projectId: context.memoryProjectId, messages: session.messages, trace: session.trace, startMessageIndex, now: context.now, createId: context.createId, force: true }).catch(() => {});
 	if (!context.command.resumeSessionId && !context.command.sessionId) return;
-	const stored = storedSession(context.sessionId, context.agent, context.command, session, context.stored, context.now());
+	const stored = storedSession(context.sessionId, context.agent, context.command, session, context.stored, context.now(), context.statsData);
 	await context.sessionStore.saveSession(stored);
 	context.stored = stored;
 }
@@ -342,7 +345,7 @@ function chatSessionStore(command: ChatCommand, deps: ChatServiceDeps): AgentSes
 	return new JsonSessionStore(command.sessionDir ?? path.join(process.cwd(), ".evolving-agent", "sessions"));
 }
 
-function storedSession(id: string, agent: AgentSpec, command: ResolvedChatCommand, session: AgentSession, existing: StoredAgentSession | undefined, timestamp: number): StoredAgentSession {
+function storedSession(id: string, agent: AgentSpec, command: ResolvedChatCommand, session: AgentSession, existing: StoredAgentSession | undefined, timestamp: number, statsData?: Record<string, unknown>): StoredAgentSession {
 	return {
 		id,
 		agentId: agent.id,
@@ -354,6 +357,7 @@ function storedSession(id: string, agent: AgentSpec, command: ResolvedChatComman
 		createdAt: existing?.createdAt ?? timestamp,
 		updatedAt: timestamp,
 		...(existing?.metadata ? { metadata: existing.metadata } : {}),
+		...(statsData ? { statsData } : {}),
 	};
 }
 

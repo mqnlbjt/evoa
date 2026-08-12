@@ -197,6 +197,121 @@ export class StatsAccumulator {
 		};
 	}
 
+	/** 持久化：导出核心计数（排除运行时瞬时状态）。 */
+	serialize(): Record<string, unknown> {
+		return {
+			eventCount: this.eventCount,
+			turnCount: this.turnCount,
+			runCount: this.runCount,
+			runPassed: this.runPassed,
+			runFailed: this.runFailed,
+			runErrored: this.runErrored,
+			runTimeout: this.runTimeout,
+			runDurationsMs: [...this.runDurationsMs],
+			modelRequestCount: this.modelRequestCount,
+			modelResponseCount: this.modelResponseCount,
+			assistantDeltaCount: this.assistantDeltaCount,
+			modelDurationsMs: [...this.modelDurationsMs],
+			tokens: { ...this.tokens },
+			ttftMs: this.ttftMs,
+			recentRequestId: this.recentRequestId,
+			recentStopReason: this.recentStopReason,
+			turnUsageHistory: [...this.turnUsageHistory],
+			compactionCount: this.compactionCount,
+			latestContextTokens: this.latestContextTokens,
+			latestContextView: this.latestContextView,
+			toolCallCount: this.toolCallCount,
+			toolResultCount: this.toolResultCount,
+			toolStatuses: { ...this.toolStatuses },
+			toolDurationsMs: [...this.toolDurationsMs],
+			mcpCount: this.mcpCount,
+			mcpDurationMs: this.mcpDurationMs,
+			skillCount: this.skillCount,
+			skillDurationMs: this.skillDurationMs,
+			memoryCounts: { ...this.memoryCounts },
+			toolsByName: Array.from(this.toolsByName.entries()).map(([name, tool]) => ({ ...tool })),
+			scoreCount: this.scoreCount,
+			scorePassed: this.scorePassed,
+			scoreRatioTotal: this.scoreRatioTotal,
+			latestScoreRatio: this.latestScoreRatio,
+			errorCount: this.errorCount,
+			latestError: this.latestError,
+		};
+	}
+
+	/** 从持久化数据恢复。 */
+	restore(data: Record<string, unknown> | undefined): void {
+		if (!data) return;
+		this.eventCount = num(data.eventCount);
+		this.turnCount = num(data.turnCount);
+		this.runCount = num(data.runCount);
+		this.runPassed = num(data.runPassed);
+		this.runFailed = num(data.runFailed);
+		this.runErrored = num(data.runErrored);
+		this.runTimeout = num(data.runTimeout);
+		this.runDurationsMs = asNumArray(data.runDurationsMs);
+		this.modelRequestCount = num(data.modelRequestCount);
+		this.modelResponseCount = num(data.modelResponseCount);
+		this.assistantDeltaCount = num(data.assistantDeltaCount);
+		this.modelDurationsMs.length = 0;
+		this.modelDurationsMs.push(...asNumArray(data.modelDurationsMs));
+		const tokens = asRecord(data.tokens);
+		if (tokens) Object.assign(this.tokens, {
+			inputTokens: num(tokens.inputTokens),
+			outputTokens: num(tokens.outputTokens),
+			reasoningTokens: num(tokens.reasoningTokens),
+			cacheReadTokens: num(tokens.cacheReadTokens),
+			cacheWriteTokens: num(tokens.cacheWriteTokens),
+			totalTokens: num(tokens.totalTokens),
+		});
+		this.ttftMs = optNum(data.ttftMs);
+		this.recentRequestId = optStr(data.recentRequestId);
+		this.recentStopReason = optStr(data.recentStopReason);
+		this.turnUsageHistory.length = 0;
+		this.turnUsageHistory.push(...(Array.isArray(data.turnUsageHistory) ? data.turnUsageHistory as ModelTurnUsageSnapshot[] : []));
+		this.compactionCount = num(data.compactionCount);
+		this.latestContextTokens = optNum(data.latestContextTokens);
+		this.latestContextView = asRecord(data.latestContextView) as typeof this.latestContextView;
+		this.toolCallCount = num(data.toolCallCount);
+		this.toolResultCount = num(data.toolResultCount);
+		const statuses = asRecord(data.toolStatuses);
+		if (statuses) {
+			for (const key of Object.keys(this.toolStatuses)) this.toolStatuses[key as ToolResultStatus] = num(statuses[key]);
+		}
+		this.toolDurationsMs.length = 0;
+		this.toolDurationsMs.push(...asNumArray(data.toolDurationsMs));
+		this.mcpCount = num(data.mcpCount);
+		this.mcpDurationMs = num(data.mcpDurationMs);
+		this.skillCount = num(data.skillCount);
+		this.skillDurationMs = num(data.skillDurationMs);
+		const memory = asRecord(data.memoryCounts);
+		if (memory) {
+			for (const [key, value] of Object.entries(memory)) this.memoryCounts[key] = num(value);
+		}
+		this.toolsByName.clear();
+		if (Array.isArray(data.toolsByName)) {
+			for (const item of data.toolsByName as Array<Record<string, unknown>>) {
+				const name = optStr(item.name);
+				if (!name) continue;
+				this.toolsByName.set(name, {
+					name,
+					count: num(item.count),
+					totalDurationMs: num(item.totalDurationMs),
+					maxDurationMs: num(item.maxDurationMs),
+					errors: num(item.errors),
+					inputBytes: num(item.inputBytes),
+					outputBytes: num(item.outputBytes),
+				});
+			}
+		}
+		this.scoreCount = num(data.scoreCount);
+		this.scorePassed = num(data.scorePassed);
+		this.scoreRatioTotal = num(data.scoreRatioTotal);
+		this.latestScoreRatio = optNum(data.latestScoreRatio);
+		this.errorCount = num(data.errorCount);
+		this.latestError = optStr(data.latestError);
+	}
+
 	private applyRunStart(event: TraceEvent): void {
 		this.currentRunStartedAt = event.timestamp;
 	}
@@ -502,6 +617,24 @@ function objectPath(value: unknown, path: string[]): unknown {
 	let current = value;
 	for (const key of path) current = objectRecord(current)[key];
 	return current;
+}
+
+// ---- 持久化辅助 ----------------
+
+function num(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+function optNum(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function optStr(value: unknown): string | undefined {
+	return typeof value === "string" && value ? value : undefined;
+}
+function asNumArray(value: unknown): number[] {
+	return Array.isArray(value) ? value.filter((item): item is number => typeof item === "number" && Number.isFinite(item)) : [];
+}
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function numberField(value: Record<string, unknown>, key: string): number | undefined {

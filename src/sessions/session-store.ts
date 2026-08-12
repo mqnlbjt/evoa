@@ -29,6 +29,8 @@ export interface StoredAgentSession {
 	createdAt: number;
 	updatedAt: number;
 	metadata?: Record<string, unknown>;
+	/** 会话统计持久化数据（token 用量等），由 ChatState.serializeStats 产出。 */
+	statsData?: Record<string, unknown>;
 }
 
 export interface AgentSessionStore {

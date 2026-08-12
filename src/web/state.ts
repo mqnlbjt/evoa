@@ -142,6 +142,16 @@ export class ChatState {
 		return this.evolutionHistory;
 	}
 
+	/** 导出统计供持久化。 */
+	serializeStats(): Record<string, unknown> {
+		return this.stats.serialize();
+	}
+
+	/** 恢复持久化的统计（resume 会话时）。 */
+	restoreStats(data: Record<string, unknown> | undefined): void {
+		this.stats.restore(data);
+	}
+
 	applyTraceEvent(event: TraceEvent): void {
 		this.stats.apply(event);
 		this.trace.push(event);

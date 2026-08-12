@@ -25,6 +25,8 @@ export async function createChatSession(options: ChatSessionOptions): Promise<Ch
 		},
 	});
 	state = new ChatState(chatStateOptions(chat, options));
+	// 恢复持久化的统计（token 用量等）
+	state.restoreStats(chat.statsData);
 	return { chat, state };
 }
 
