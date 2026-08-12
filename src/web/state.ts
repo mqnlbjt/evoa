@@ -21,6 +21,7 @@ export class ChatState {
 	private toolCallCount = 0;
 	private lastError: string | undefined;
 	private streamingAssistantLogId: string | undefined;
+	private streamingReasoningLogId: string | undefined;
 	private runStartedAt: number | undefined;
 	private runDurationMs: number | undefined;
 	private toolDurationMs = 0;
@@ -87,6 +88,7 @@ export class ChatState {
 		this.toolCallCount = 0;
 		this.lastError = undefined;
 		this.streamingAssistantLogId = undefined;
+		this.streamingReasoningLogId = undefined;
 		this.runStartedAt = undefined;
 		this.runDurationMs = undefined;
 		this.toolDurationMs = 0;
@@ -159,6 +161,7 @@ export class ChatState {
 		if (event.type === "run_start") this.applyRunStart(event);
 		else if (event.type === "model_request") this.applyModelRequest(event);
 		else if (event.type === "assistant_delta") this.applyAssistantDelta(event);
+		else if (event.type === "assistant_reasoning_delta") this.applyReasoningDelta(event);
 		else if (event.type === "model_response") this.applyModelResponse(event);
 		else if (event.type === "tool_call") this.applyToolCall(event);
 		else if (event.type === "tool_result") this.applyToolResult(event);
@@ -210,11 +213,26 @@ export class ChatState {
 		this.trimLog();
 	}
 
+	private applyReasoningDelta(event: TraceEvent): void {
+		const text = extractDeltaText(event.payload);
+		if (!text) return;
+		const existing = this.log.find((entry) => entry.id === this.streamingReasoningLogId);
+		if (existing) {
+			existing.text += text;
+			return;
+		}
+		const entry = this.createLogEntry({ kind: "reasoning", text, severity: "info" });
+		this.log.push(entry);
+		this.streamingReasoningLogId = entry.id;
+		this.trimLog();
+	}
+
 	private applyModelResponse(event: TraceEvent): void {
 		const response = event.payload as ModelResponse;
 		this.applyModelRouting(response);
 		if (response.text) this.upsertAssistantResponse(response.text);
 		this.streamingAssistantLogId = undefined;
+		this.streamingReasoningLogId = undefined;
 		if (this.runningTools.size === 0) this.status = "idle";
 	}
 
@@ -246,6 +264,7 @@ export class ChatState {
 
 	private applyRunEnd(event: TraceEvent): void {
 		this.streamingAssistantLogId = undefined;
+		this.streamingReasoningLogId = undefined;
 		const payload = event.payload as { status?: string; durationMs?: number };
 		if (typeof payload.durationMs === "number") this.runDurationMs = payload.durationMs;
 		else if (this.runStartedAt !== undefined) this.runDurationMs = Math.max(0, event.timestamp - this.runStartedAt);
@@ -284,6 +303,7 @@ export class ChatState {
 	private trimLog(): void {
 		const removed = trimToLimit(this.log, this.options.maxLogEntries ?? DEFAULT_MAX_LOG_ENTRIES);
 		if (removed > 0 && this.streamingAssistantLogId && !this.log.some((entry) => entry.id === this.streamingAssistantLogId)) this.streamingAssistantLogId = undefined;
+		if (removed > 0 && this.streamingReasoningLogId && !this.log.some((entry) => entry.id === this.streamingReasoningLogId)) this.streamingReasoningLogId = undefined;
 	}
 }
 

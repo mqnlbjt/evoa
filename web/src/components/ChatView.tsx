@@ -212,6 +212,31 @@ export function ChatView({ snapshot, busy, onSubmit, onInterrupt }: ChatViewProp
 }
 
 function LogEntry({ entry, expanded, onToggle, groupClass = "" }: { entry: ChatLogEntry; expanded: boolean; onToggle: () => void; groupClass?: string }): React.ReactElement {
+	if (entry.kind === "reasoning") {
+		// 思考过程：默认折叠为小胶囊，点击展开全文（可能几万 token，防刷屏）
+		const charCount = entry.text.length;
+		return (
+			<div
+				className="msg msg-reasoning"
+				onClick={onToggle}
+				role="button"
+				tabIndex={0}
+				onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+			>
+				<div className="reasoning-head">
+					<BrainCircuit size={13} className="reasoning-icon" />
+					<span>thinking</span>
+					<span className="reasoning-count">{charCount} chars</span>
+					<span className="reasoning-caret">{expanded ? "hide" : "show"}</span>
+				</div>
+				{expanded && (
+					<div className="reasoning-body">
+						<Markdown text={entry.text} />
+					</div>
+				)}
+			</div>
+		);
+	}
 	if (entry.kind === "user") {
 		const isCompacted = entry.text.startsWith("[Compacted conversation summary]");
 		if (isCompacted) {

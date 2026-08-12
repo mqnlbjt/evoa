@@ -136,6 +136,9 @@ export async function runAgentLoop(
 			onTextDelta: (delta: string) => {
 				recordEvent(session, options, event(createId, now, "assistant_delta", session, { delta }));
 			},
+			onReasoningDelta: (delta: string) => {
+				recordEvent(session, options, event(createId, now, "assistant_reasoning_delta", session, { delta }));
+			},
 		};
 		const request: ModelRequest = {
 			agent: session.agent,

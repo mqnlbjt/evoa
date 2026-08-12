@@ -4,7 +4,7 @@ import type { StatsSnapshot } from "./stats.js";
 
 export type ChatStatus = "idle" | "thinking" | "running_tool" | "done" | "error";
 export type ChatView = "chat" | "stats" | "trace" | "evolve";
-export type ChatLogKind = "user" | "assistant" | "tool_call" | "tool_result" | "system" | "error" | "score";
+export type ChatLogKind = "user" | "assistant" | "reasoning" | "tool_call" | "tool_result" | "system" | "error" | "score";
 export type ChatLogSeverity = "info" | "success" | "warning" | "error";
 
 export interface ChatLogEntry {

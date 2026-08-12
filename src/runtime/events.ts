@@ -7,6 +7,7 @@ export type TraceEventType =
 	| "model_response"
 	| "response_truncated"
 	| "assistant_delta"
+	| "assistant_reasoning_delta"
 	| "context_view"
 	| "context_compaction"
 	| "context_trim"
@@ -33,6 +34,7 @@ export type TraceEvent =
 	| TraceEventBase<"model_response", Record<string, unknown>>
 	| TraceEventBase<"response_truncated", ResponseTruncatedPayload>
 	| TraceEventBase<"assistant_delta", Record<string, unknown>>
+	| TraceEventBase<"assistant_reasoning_delta", Record<string, unknown>>
 	| TraceEventBase<"context_view", ContextViewPayload>
 	| TraceEventBase<"context_compaction", ContextCompactionPayload>
 	| TraceEventBase<"context_trim", ContextTrimPayload>
