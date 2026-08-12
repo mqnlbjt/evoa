@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { TraceEvent } from "../src/runtime/events.js";
 import { StatsAccumulator, latencySummary } from "../src/web/stats.js";
+import { ChatState } from "../src/web/state.js";
+import type { ChatStateOptions } from "../src/web/types.js";
 
 describe("StatsAccumulator", () => {
 	it("aggregates run model token latency and score metrics", () => {
@@ -71,3 +73,114 @@ describe("StatsAccumulator", () => {
 function event(type: TraceEvent["type"], payload: unknown, timestamp = 1): TraceEvent {
 	return { id: `${type}-${timestamp}`, type, timestamp, agentId: "agent", taskId: "task", sessionId: "session", payload } as TraceEvent;
 }
+
+function applySampleEvents(stats: StatsAccumulator): void {
+	for (const item of sampleEvents()) stats.apply(item);
+}
+
+function sampleEvents(): TraceEvent[] {
+	return [
+		event("run_start", {}, 10),
+		event("model_request", { turn: 2 }, 20),
+		event("assistant_delta", { delta: "h" }, 25),
+		event("model_response", {
+			text: "hello",
+			requestId: "req-1",
+			timing: { startedAt: 20, endedAt: 70, durationMs: 50 },
+			usage: { inputTokens: 100, outputTokens: 25, reasoningTokens: 5, cacheReadTokens: 7, cacheWriteTokens: 3, totalTokens: 125, costUsd: 0.01 },
+			metadata: { stopReason: "end_turn" },
+		}, 70),
+		event("score", { score: 8, maxScore: 10, passed: true }, 80),
+		event("tool_call", { call: { id: "read-1", name: "read_file", input: { path: "a" } } }, 81),
+		event("tool_result", { call: { id: "read-1", name: "read_file", input: { path: "a" } }, decision: { decision: "allow" }, status: "success", output: { text: "ok" }, durationMs: 10 }, 91),
+		event("context_view", { tokenEstimate: 3000, budgetMaxTokens: 200000, effectiveLimit: 180000, usageFraction: 0.015 }, 95),
+		event("error", { message: "boom" }, 100),
+		event("run_end", { status: "passed", durationMs: 100 }, 110),
+	];
+}
+
+describe("StatsAccumulator persistence", () => {
+	it("round-trips serialize/restore into an identical snapshot", () => {
+		const source = new StatsAccumulator();
+		applySampleEvents(source);
+
+		const expected = source.snapshot(120);
+		const restored = new StatsAccumulator();
+		restored.restore(source.serialize());
+
+		expect(restored.snapshot(120)).toEqual(expected);
+	});
+
+	it("survives a JSON round-trip like disk persistence", () => {
+		const source = new StatsAccumulator();
+		applySampleEvents(source);
+
+		const expected = source.snapshot(120);
+		const data = JSON.parse(JSON.stringify(source.serialize())) as Record<string, unknown>;
+		const restored = new StatsAccumulator();
+		restored.restore(data);
+
+		expect(restored.snapshot(120)).toEqual(expected);
+	});
+
+	it("restore(undefined) is a no-op", () => {
+		const stats = new StatsAccumulator();
+		stats.apply(event("run_end", { status: "passed", durationMs: 10 }, 11));
+		const before = stats.snapshot();
+
+		stats.restore(undefined);
+
+		expect(stats.snapshot()).toEqual(before);
+	});
+
+	it("restore replaces prior state without double counting", () => {
+		const source = new StatsAccumulator();
+		applySampleEvents(source);
+		const persisted = source.serialize();
+
+		// 模拟 resume：已有新会话事件后，用落盘数据恢复（覆盖而非累加）
+		const resumed = new StatsAccumulator();
+		resumed.apply(event("run_end", { status: "failed", durationMs: 1 }, 2));
+		resumed.restore(persisted);
+
+		expect(resumed.snapshot(120)).toEqual(source.snapshot(120));
+	});
+
+	it("restore tolerates malformed or partial data", () => {
+		const stats = new StatsAccumulator();
+		stats.apply(event("run_end", { status: "passed", durationMs: 10 }, 11));
+
+		stats.restore({ eventCount: "bogus", runDurationsMs: [1, "x", NaN], tokens: { inputTokens: "bad" }, toolsByName: [{ name: "read_file", count: "nope" }] });
+		const after = stats.snapshot();
+
+		expect(after.overview.eventCount).toBe(0);
+		expect(after.runs.count).toBe(0);
+		expect(after.runs.totalDurationMs).toBe(1);
+		expect(after.model.tokens.inputTokens).toBe(0);
+		expect(after.topToolsByCount).toHaveLength(1);
+		expect(after.topToolsByCount[0]).toMatchObject({ name: "read_file", count: 0, totalDurationMs: 0 });
+	});
+});
+
+describe("ChatState stats persistence", () => {
+	it("serializeStats/restoreStats carry stats across session resume", () => {
+		const options: ChatStateOptions = {
+			agentName: "agent",
+			agentId: "agent",
+			model: "model",
+			provider: "provider",
+			toolProfile: "default",
+			cwd: process.cwd(),
+			sessionId: "session",
+		};
+		const first = new ChatState(options);
+		for (const item of sampleEvents()) first.applyTraceEvent(item);
+		const expected = first.snapshot().stats;
+
+		const persisted = JSON.parse(JSON.stringify(first.serializeStats())) as Record<string, unknown>;
+		const resumed = new ChatState(options);
+		resumed.restoreStats(persisted);
+
+		expect(resumed.snapshot().stats).toEqual(expected);
+	});
+});

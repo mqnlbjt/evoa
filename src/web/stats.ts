@@ -263,6 +263,7 @@ export class StatsAccumulator {
 			cacheReadTokens: num(tokens.cacheReadTokens),
 			cacheWriteTokens: num(tokens.cacheWriteTokens),
 			totalTokens: num(tokens.totalTokens),
+			...(tokens.costUsd === undefined ? {} : { costUsd: num(tokens.costUsd) }),
 		});
 		this.ttftMs = optNum(data.ttftMs);
 		this.recentRequestId = optStr(data.recentRequestId);
