@@ -9,13 +9,6 @@ import type { ChatStateSnapshot, ChatStatus } from "../types";
 export function StatusCorner({ snapshot }: { snapshot: ChatStateSnapshot }): React.ReactElement {
 	const usage = snapshot.contextUsage;
 	const usagePct = usage ? Math.round(usage.usageFraction * 100) : 0;
-	const usageColor = usage
-		? usagePct >= 90
-			? "var(--bad)"
-			: usagePct >= 75
-				? "var(--warn)"
-				: "var(--signal)"
-		: "var(--signal)";
 	const tokens = snapshot.stats.model.tokens;
 	const totalTokens = tokens.totalTokens;
 	const hasTokenDetails = totalTokens > 0 || tokens.inputTokens > 0 || tokens.outputTokens > 0;
@@ -56,15 +49,18 @@ export function StatusCorner({ snapshot }: { snapshot: ChatStateSnapshot }): Rea
 					</span>
 				</div>
 
-				{/* 上下文占用：百分比 + 进度条 + 估算 token */}
+				{/* 上下文占用：百分比 + 总量 + Claude Code 风格方格网格 */}
 				{usage && (
-					<div className="status-row status-ctx-row">
-						<span className="ctx-label" style={{ ...MONO, color: "var(--text-faint)" }} title={`${usage.tokenEstimate.toLocaleString()} / ${usage.budgetMaxTokens.toLocaleString()} tokens`}>
-							context {usagePct}% · {formatTokens(usage.tokenEstimate)} / {formatTokens(usage.budgetMaxTokens)}
-						</span>
-						<span className="ctx-meter" title={`${usagePct}% of budget`}>
-							<span className="ctx-meter-fill" style={{ width: `${usagePct}%`, background: usageColor }} />
-						</span>
+					<div className="status-ctx-row">
+						<div className="status-row" style={{ justifyContent: "space-between" }}>
+							<span className="ctx-label" style={{ ...MONO, color: "var(--text-faint)" }} title={`${usage.tokenEstimate.toLocaleString()} / ${usage.budgetMaxTokens.toLocaleString()} tokens`}>
+								context {usagePct}%
+							</span>
+							<span style={MONO_DIM}>
+								{formatTokens(usage.tokenEstimate)} / {formatTokens(usage.budgetMaxTokens)}
+							</span>
+						</div>
+						<ContextGrid pct={usagePct} />
 					</div>
 				)}
 
@@ -118,6 +114,26 @@ function TokenCell({ label, value, accent }: { label: string; value: number; acc
 			<span className="token-cell-value">{formatTokens(value)}</span>
 		</span>
 	);
+}
+
+/**
+ * Claude Code 风格上下文方格：10×10 = 100 格，每格代表 1% 上下文窗口。
+ * 已占用格子按占用率渐变（低→琥珀，中→黄，高→红），剩余为空格。
+ */
+function ContextGrid({ pct }: { pct: number }): React.ReactElement {
+	const cells: React.ReactElement[] = [];
+	for (let i = 0; i < 100; i++) {
+		const filled = i < pct;
+		const tier = pct >= 90 ? "grid-high" : pct >= 70 ? "grid-mid" : "grid-low";
+		cells.push(
+			<span
+				key={i}
+				className={`ctx-cell ${filled ? `ctx-filled ${tier}` : "ctx-empty"}`}
+				title={filled ? `occupied ${i + 1}%` : `free from ${i + 1}%`}
+			/>,
+		);
+	}
+	return <div className="ctx-grid">{cells}</div>;
 }
 
 /** 路径只留末尾两段，避免浮层过长。 */

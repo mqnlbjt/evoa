@@ -31,6 +31,7 @@
 	--on-signal: #1a1205;
 	--good-soft: rgba(87, 214, 141, 0.12);
 	--bad-soft: rgba(255, 92, 92, 0.12);
+	--warn-soft: rgba(255, 176, 32, 0.14);
 	--volt-soft: rgba(127, 180, 255, 0.12);
 	--purple: #b18cff;        /* trace: context */
 	--cyan: #3ec9d6;          /* trace: score */
@@ -69,6 +70,7 @@
 	--on-signal: #ffffff;
 	--good-soft: rgba(26, 127, 55, 0.10);
 	--bad-soft: rgba(198, 40, 40, 0.10);
+	--warn-soft: rgba(180, 83, 9, 0.12);
 	--volt-soft: rgba(26, 95, 180, 0.10);
 	--purple: #7c5cd6;
 	--cyan: #0e8a9c;
@@ -1051,7 +1053,40 @@ body::before {
 	border-top: 1px solid var(--border);
 	padding-top: 8px;
 	margin-top: 2px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	width: 100%;
 }
+
+/* Claude Code 风格上下文方格：10×10 */
+.ctx-grid {
+	display: grid;
+	grid-template-columns: repeat(10, 1fr);
+	gap: 3px;
+	width: 100%;
+}
+.ctx-cell {
+	aspect-ratio: 1;
+	border-radius: 2px;
+}
+.ctx-empty {
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+}
+.ctx-filled.grid-low {
+	background: var(--good);
+	box-shadow: 0 0 4px var(--good-soft);
+}
+.ctx-filled.grid-mid {
+	background: var(--warn);
+	box-shadow: 0 0 4px var(--warn-soft);
+}
+.ctx-filled.grid-high {
+	background: var(--bad);
+	box-shadow: 0 0 4px var(--bad-soft);
+}
+
 
 /* token 明细网格：2 行 × 3 列 */
 .status-token-grid {
