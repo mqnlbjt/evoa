@@ -5,6 +5,8 @@ import {
 	Hexagon,
 	MessageSquare,
 	Moon,
+	PanelLeftClose,
+	PanelLeftOpen,
 	Plus,
 	ScanSearch,
 	Sun,
@@ -34,6 +36,8 @@ const MORE_ITEMS: Array<{ view: ChatView; label: string; icon: LucideIcon }> = [
 	{ view: "evolve", label: "Evolve", icon: Dna },
 ];
 
+const PANEL_KEY = "evoa-sessions-panel-open";
+
 /** 时间 → 友好显示。 */
 function timeAgo(ts: number): string {
 	const diff = Date.now() - ts;
@@ -55,14 +59,33 @@ export function Sidebar({
 	onToggleTheme,
 }: SidebarProps): React.ReactElement {
 	const [moreOpen, setMoreOpen] = useState(false);
+	// 面板折叠状态：localStorage 持久化，默认展开
+	const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) !== "0");
 	const moreRef = useRef<HTMLDivElement>(null);
+
+	// 排序：最新更新的在最前（防御性，后端已按 updatedAt 降序）
+	const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+
+	const togglePanel = (): void => {
+		setPanelOpen((open) => {
+			localStorage.setItem(PANEL_KEY, open ? "0" : "1");
+			return !open;
+		});
+	};
 
 	return (
 		<>
 			<aside className="rail">
-				<div className="rail-logo" title="evoa">
-					<Hexagon size={26} strokeWidth={1.75} />
-				</div>
+				<button
+					type="button"
+					className="rail-logo"
+					onClick={togglePanel}
+					title={panelOpen ? "Hide sessions" : "Show sessions"}
+					aria-label={panelOpen ? "Hide sessions" : "Show sessions"}
+					aria-expanded={panelOpen}
+				>
+					{panelOpen ? <PanelLeftClose size={20} strokeWidth={1.75} /> : <PanelLeftOpen size={20} strokeWidth={1.75} />}
+				</button>
 
 				<nav className="rail-nav">
 					<button
@@ -132,37 +155,45 @@ export function Sidebar({
 				</div>
 			</aside>
 
-			{/* 常驻 Sessions 面板：所有会话排开，active 高亮 */}
-			<aside className="sessions-panel">
-				<div className="sessions-panel-head">
-					<span className="sessions-panel-title">Sessions</span>
-					<button type="button" className="btn btn-primary btn-icon-only" onClick={onNewSession} title="New session" aria-label="New session">
-						<Plus size={15} strokeWidth={2.25} />
-					</button>
-				</div>
-				<div className="session-list">
-					{sessions.length === 0 && <div className="session-empty">No sessions yet — start a new one.</div>}
-					{sessions.map((session) => {
-						const isActive = session.active && session.id === currentSessionId;
-						return (
-							<button
-								key={session.id}
-								type="button"
-								className={`session-item${isActive ? " session-active" : ""}`}
-								onClick={() => onResume(session.id)}
-								title={session.id}
-							>
-								<div className="session-item-top">
-									<span className={`session-dot${isActive ? " session-dot-on" : ""}`} />
-									<span className="session-preview">{session.preview || "(empty)"}</span>
-								</div>
-								<div className="session-meta">
-									<span>{session.agentId}</span>
-									<span className="session-time">{timeAgo(session.updatedAt)}</span>
-								</div>
-							</button>
-						);
-					})}
+			{/* 常驻 Sessions 面板：可折叠，最新会话在最前 */}
+			<aside className={`sessions-panel${panelOpen ? "" : " panel-collapsed"}`}>
+				<div className="sessions-panel-inner">
+					<div className="sessions-panel-head">
+						<span className="sessions-panel-title">Sessions</span>
+						<button
+							type="button"
+							className="btn btn-primary btn-new-session"
+							onClick={onNewSession}
+							title="New session"
+							aria-label="New session"
+						>
+							<Plus size={16} strokeWidth={2.5} /> New
+						</button>
+					</div>
+					<div className="session-list">
+						{sortedSessions.length === 0 && <div className="session-empty">No sessions yet — start a new one.</div>}
+						{sortedSessions.map((session) => {
+							const isActive = session.active && session.id === currentSessionId;
+							return (
+								<button
+									key={session.id}
+									type="button"
+									className={`session-item${isActive ? " session-active" : ""}`}
+									onClick={() => onResume(session.id)}
+									title={session.id}
+								>
+									<div className="session-item-top">
+										<span className={`session-dot${isActive ? " session-dot-on" : ""}`} />
+										<span className="session-preview">{session.preview || "(empty)"}</span>
+									</div>
+									<div className="session-meta">
+										<span>{session.agentId}</span>
+										<span className="session-time">{timeAgo(session.updatedAt)}</span>
+									</div>
+								</button>
+							);
+						})}
+					</div>
 				</div>
 			</aside>
 		</>
