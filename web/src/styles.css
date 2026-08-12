@@ -435,7 +435,7 @@ body::before {
 	pointer-events: none;
 	transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
 }
-.drawer-open {
+.sessions-drawer.drawer-open {
 	opacity: 1;
 	visibility: visible;
 	transform: none;
@@ -715,8 +715,16 @@ body::before {
 	padding: 10px 14px;
 }
 
+.msg {
+	display: flex;
+	flex-direction: column;
+	max-width: 70%;
+	animation: rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
 .msg-assistant {
 	align-self: flex-start;
+	max-width: 100%;
 }
 .msg-assistant .markdown {
 	font-size: 14.5px;
@@ -734,6 +742,53 @@ body::before {
 	padding: 8px 14px;
 	white-space: pre-wrap;
 	word-break: break-word;
+}
+
+/* ---------- 历史压缩卡片 ---------- */
+
+.msg-compaction {
+	align-self: center;
+	width: 100%;
+	max-width: 680px;
+	margin: 14px auto;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 10px 14px;
+	cursor: pointer;
+	user-select: none;
+	transition: border-color 0.2s ease, background 0.2s ease;
+}
+.msg-compaction:hover {
+	border-color: var(--border-strong);
+	background: var(--bg-elev2);
+}
+
+.compaction-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+.compaction-icon {
+	color: var(--signal);
+}
+.compaction-caret {
+	margin-left: auto;
+	color: var(--text-faint);
+}
+
+.compaction-body {
+	margin-top: 10px;
+	border-top: 1px solid var(--border);
+	padding-top: 10px;
+	font-size: 13.5px;
+	color: var(--text-dim);
+	line-height: 1.6;
 }
 
 /* 等宽小字时间戳 */
@@ -755,6 +810,7 @@ body::before {
 	max-width: 100%;
 	background: var(--bg-elev);
 	border: 1px solid var(--border);
+	border-left: 2px solid var(--signal);
 	border-radius: 12px;
 	overflow: hidden;
 	animation: rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) backwards;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent } from "react";
 import {
 	AlertTriangle,
+	Archive,
 	ArrowUp,
 	BrainCircuit,
 	CheckCircle2,
@@ -196,6 +197,30 @@ export function ChatView({ snapshot, busy, onSubmit, onInterrupt }: ChatViewProp
 
 function LogEntry({ entry, expanded, onToggle }: { entry: ChatLogEntry; expanded: boolean; onToggle: () => void }): React.ReactElement {
 	if (entry.kind === "user") {
+		const isCompacted = entry.text.startsWith("[Compacted conversation summary]");
+		if (isCompacted) {
+			const cleanText = entry.text.replace("[Compacted conversation summary]", "").trim();
+			return (
+				<div
+					className="msg msg-compaction"
+					onClick={onToggle}
+					role="button"
+					tabIndex={0}
+					onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+				>
+					<div className="compaction-head">
+						<Archive size={13} className="compaction-icon" />
+						<span>Compacted Conversation History</span>
+						<span className="compaction-caret">{expanded ? "hide" : "show"}</span>
+					</div>
+					{expanded && (
+						<div className="compaction-body">
+							<Markdown text={cleanText} />
+						</div>
+					)}
+				</div>
+			);
+		}
 		return (
 			<div className="msg msg-user">
 				<Markdown text={entry.text} />
