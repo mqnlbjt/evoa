@@ -1,0 +1,33 @@
+name: Publish to npm
+
+# 手动触发：先本地 bump package.json version 并 push，再到这里 Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: "npm"
+
+      - run: npm ci
+
+      # prepublishOnly 会跑 build + build:web，web 依赖需要先装
+      - run: npm ci --prefix web
+
+      # 发版前自检：类型 + 测试
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

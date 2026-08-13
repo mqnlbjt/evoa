@@ -12,3 +12,6 @@ test-repro.ts
 test-status.ts
 test-exec
 review-*.md
+
+# 本地文档（含简历材料，勿提交）
+docs/
